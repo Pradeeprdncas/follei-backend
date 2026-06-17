@@ -1,32 +1,96 @@
-"""Build context string from retrieved chunks."""
 from app.repositories.chunk import ChunkRepository
+from app.repositories.document import DocumentRepository
 from app.config.database import SessionLocal
-from loguru import logger
 
 
-def build_context(chunk_ids: list[str]) -> str:
-    """
-    Fetch full chunk texts from PostgreSQL and assemble into context string.
-    Returns ordered context string.
-    """
+def build_context(chunk_ids):
+
+    if not chunk_ids:
+        return ""
+
     db = SessionLocal()
+
     try:
-        repo = ChunkRepository(db)
-        chunks = repo.get_by_ids(chunk_ids)
 
-        # Sort by chunk_index to maintain document order
-        chunks.sort(key=lambda c: c.chunk_index)
+        chunk_repo = ChunkRepository(db)
+        doc_repo = DocumentRepository(db)
 
-        parts = []
+        chunks = chunk_repo.get_by_ids(chunk_ids)
+
+        if not chunks:
+            return ""
+
+        chunks.sort(
+            key=lambda c: (
+                str(c.document_id),
+                c.chunk_index
+            )
+        )
+
+        document_cache = {}
+
+        sections = []
+
         for chunk in chunks:
-            # FIX: Clean, safe inline definition for headings
-            heading = f"[{chunk.heading}] " if chunk.heading else ""
-            parts.append(f"{heading}Chunk {chunk.chunk_index} (Page {chunk.page}):\n{chunk.text}")
 
-        # FIX: Replaced literal spaces/returns with explicit newline escape markers
-        context = "\n\n---\n\n".join(parts)
-        
-        logger.info(f"Built context: {len(parts)} chunks, {len(context)} chars")
-        return context
+            if chunk.document_id not in document_cache:
+
+                document_cache[
+                    chunk.document_id
+                ] = doc_repo.get_by_id(
+                    chunk.document_id
+                )
+
+            doc = document_cache[
+                chunk.document_id
+            ]
+
+            document_name = (
+                doc.filename
+                if doc
+                else "Unknown"
+            )
+
+            section_path = ""
+
+            if chunk.section_path:
+
+                if isinstance(
+                    chunk.section_path,
+                    list
+                ):
+                    section_path = (
+                        " > ".join(
+                            chunk.section_path
+                        )
+                    )
+                else:
+                    section_path = str(
+                        chunk.section_path
+                    )
+
+            sections.append(
+                f"""
+DOCUMENT:
+{document_name}
+
+PAGE:
+{chunk.page}
+
+SECTION:
+{section_path}
+
+TYPE:
+{chunk.chunk_type}
+
+CONTENT:
+{chunk.text}
+"""
+            )
+
+        return "\n\n====================\n\n".join(
+            sections
+        )
+
     finally:
         db.close()

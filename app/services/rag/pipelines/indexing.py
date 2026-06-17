@@ -80,16 +80,37 @@ async def index_document(file_path: str, tenant_id: str, db: Session | None = No
 
             # Create chunk record
             chunk = Chunk(
-                id=str(uuid.uuid4()),
+                id=chunk_data["chunk_id"],
+
                 document_id=doc.id,
+
                 tenant_id=tenant_id,
+
                 chunk_index=i,
+
                 text=text,
-                page=chunk_data.get("page", 0),
-                section=chunk_data.get("section"),
+
+                page=chunk_data["page"],
+
+                section=chunk_data.get("heading"),
+
                 heading=chunk_data.get("heading"),
+
+                parent_chunk_id=chunk_data.get("parent_chunk_id"),
+
+                prev_chunk_id=chunk_data.get("prev_chunk_id"),
+
+                next_chunk_id=chunk_data.get("next_chunk_id"),
+
+                chunk_type=chunk_data.get("chunk_type"),
+
+                section_path=chunk_data.get("section_path"),
+
+                word_count=chunk_data.get("word_count"),
+
                 tags=keywords[:5],
-                permissions=[],
+
+                permissions=[]
             )
             chunk_records.append(chunk)
             chunk_ids.append(chunk.id)
@@ -111,17 +132,35 @@ async def index_document(file_path: str, tenant_id: str, db: Session | None = No
             # Build payloads for Qdrant
             for c in chunk_records:
                 payloads.append({
+
+                    "text": c.text,
+
                     "chunk_id": c.id,
+
                     "document_id": c.document_id,
+
                     "tenant_id": c.tenant_id,
+
                     "page": c.page,
-                    "section": c.section,
+
                     "heading": c.heading,
-                    "tags": c.tags,
-                    "permissions": c.permissions,
+
+                    "chunk_type": c.chunk_type,
+
+                    "parent_chunk_id": c.parent_chunk_id,
+
+                    "prev_chunk_id": c.prev_chunk_id,
+
+                    "next_chunk_id": c.next_chunk_id,
+
+                    "section_path": c.section_path,
+
+                    "word_count": c.word_count,
+
+                    "tags": c.tags
                 })
 
-            # 7. Insert into Qdrant
+                            # 7. Insert into Qdrant
             ensure_collection()
             insert_chunks(chunk_ids, embeddings, payloads)
 

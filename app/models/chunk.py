@@ -23,3 +23,14 @@ class Chunk(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
 
     document = relationship("Document", back_populates="chunks")
+    parent_chunk_id = Column(String(36), nullable=True)
+
+    prev_chunk_id = Column(String(36), nullable=True)
+
+    next_chunk_id = Column(String(36), nullable=True)
+
+    chunk_type = Column(String(50), nullable=True)
+
+    word_count = Column(Integer, default=0)
+
+    section_path = Column(JSON, default=list)

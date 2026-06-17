@@ -12,23 +12,81 @@ async def generate_answer(question: str, context: str, system_prompt: str) -> st
     """
     
     # Include un-bypassable ground truth guardrails to ensure verification safety
-    compiled_system_prompt = (
-        f"{system_prompt}\n\n"
-        "ABSOLDUTE GROUND RULES:\n"
-        "- Never mention external software, tools, infrastructure dependencies, or protocols "
-        "unless explicitly declared in the context document chunks provided.\n"
-        "- If the text doesn't show a metric, value, or status, treat it as non-existent.\n"
-        "- Do not offer general industry recommendations or additions unless explicitly ordered."
-    )
+    compiled_system_prompt = f"""
+{system_prompt}
 
-    prompt = f"""Context reference segments:
-\"\"\"
-{context}
-\"\"\"
+YOU ARE A RETRIEVAL AUGMENTED GENERATION ENGINE.
 
-User Query: {question}
+You are forbidden from using world knowledge.
 
-Formulate your technical answer below:"""
+You may only transform,
+summarize,
+reorganize,
+or quote the provided context.
+
+If a fact is not explicitly contained in context,
+you must state:
+
+"The context does not specify."
+
+Never infer.
+
+Never assume.
+
+Never extrapolate.
+
+Never create examples.
+
+Never fill gaps.
+
+STRICT FACTUALITY RULES
+
+If a requested item
+is not explicitly present
+in retrieved context:
+
+Output:
+
+NOT FOUND IN RETRIEVED DOCUMENTS
+
+Do not infer.
+Do not complete.
+Do not summarize missing sections.
+Do not use world knowledge.
+
+Every bullet point must
+be traceable to retrieved text.
+"""
+
+    prompt = f"""
+    CONTEXT
+
+    {context}
+
+    QUESTION
+
+    {question}
+
+    INSTRUCTIONS
+
+    Use ONLY information found in CONTEXT.
+
+    Every statement must be directly supported by CONTEXT.
+
+    If information is missing say:
+
+    "The retrieved documents do not contain this information."
+
+    Never infer.
+
+    Never speculate.
+
+    Never use outside knowledge.
+
+    Never complete partially described systems.
+
+    Return a structured answer.
+"""
 
     try:
         async with httpx.AsyncClient(timeout=60.0) as client:

@@ -1,26 +1,56 @@
-"""PDF text extraction using pypdf."""
+import fitz
 from pathlib import Path
-from pypdf import PdfReader
-from loguru import logger
 
+def extract_pdf_text(file_path):
 
-def extract_pdf_text(file_path: str | Path) -> list[dict]:
-    """
-    Extract text page-by-page from a PDF.
-    Returns list of {"page": int, "text": str, "heading": str | None}.
-    """
+    doc = fitz.open(file_path)
+
     pages = []
-    try:
-        reader = PdfReader(str(file_path))
-        for i, page in enumerate(reader.pages, start=1):
-            text = page.extract_text() or ""
-            pages.append({
-                "page": i,
-                "text": text.strip(),
-                "heading": None,
-            })
-        logger.info(f"Extracted {len(pages)} pages from {file_path}")
-    except Exception as e:
-        logger.error(f"Failed to parse PDF {file_path}: {e}")
-        raise
+
+    current_heading = None
+
+    for page_number in range(len(doc)):
+
+        page = doc[page_number]
+
+        blocks = page.get_text(
+            "dict"
+        )["blocks"]
+
+        page_text = []
+
+        for block in blocks:
+
+            if "lines" not in block:
+                continue
+
+            for line in block["lines"]:
+
+                text = "".join(
+                    span["text"]
+                    for span in line["spans"]
+                ).strip()
+
+                if not text:
+                    continue
+
+                font_size = max(
+                    span["size"]
+                    for span in line["spans"]
+                )
+
+                if font_size > 15:
+
+                    current_heading = text
+
+                page_text.append(text)
+
+        pages.append(
+            {
+                "page": page_number + 1,
+                "heading": current_heading,
+                "text": "\n".join(page_text)
+            }
+        )
+
     return pages

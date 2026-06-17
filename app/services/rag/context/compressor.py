@@ -1,35 +1,75 @@
-"""Context compression using tiktoken token counting."""
+"""
+Chunk-aware context compressor.
+"""
+
 import tiktoken
-from app.config.settings import get_settings
 from loguru import logger
+from app.config.settings import get_settings
 
 _settings = get_settings()
 
-
-def count_tokens(text: str, model: str = "cl100k_base") -> int:
-    """Count tokens in text using tiktoken."""
-    enc = tiktoken.get_encoding(model)
-    return len(enc.encode(text))
+_encoder = tiktoken.get_encoding("cl100k_base")
 
 
-def compress_context(context: str, max_tokens: int | None = None) -> str:
+def count_tokens(text: str) -> int:
+    if not text:
+        return 0
+
+    return len(_encoder.encode(text))
+
+
+def compress_context(
+    chunks,
+    max_tokens: int | None = None
+):
     """
-    Trim context to fit within token budget.
-    Truncates from the end if over budget.
+    Keep highest-ranked chunks until token budget is reached.
     """
+
     max_t = max_tokens or _settings.MAX_CONTEXT_TOKENS
-    tokens = count_tokens(context)
 
-    if tokens <= max_t:
-        logger.info(f"Context fits: {tokens} tokens <= {max_t}")
-        return context
+    selected = []
+    total_tokens = 0
 
-    # Truncate by removing chunks from the end
-    parts = context.split("---")
-    while parts and count_tokens("---".join(parts)) > max_t:
-        parts.pop()
+    for chunk in chunks:
 
-    compressed = "---".join(parts)
-    new_tokens = count_tokens(compressed)
-    logger.info(f"Compressed context: {tokens} → {new_tokens} tokens ({len(parts)} chunks)")
-    return compressed
+        text = chunk.text if hasattr(chunk, "text") else str(chunk)
+
+        chunk_tokens = count_tokens(text)
+
+        if total_tokens + chunk_tokens > max_t:
+            break
+
+        selected.append(chunk)
+        total_tokens += chunk_tokens
+
+    logger.info(
+        f"Compressed chunks: {len(chunks)} -> {len(selected)} "
+        f"({total_tokens}/{max_t} tokens)"
+    )
+
+    return selected
+
+
+def build_context(
+    chunks,
+    max_tokens: int | None = None
+) -> str:
+    """
+    Compress then format context.
+    """
+
+    selected = compress_chunks(
+        chunks,
+        max_tokens=max_tokens
+    )
+
+    context = "\n\n---\n\n".join(
+        chunk.text for chunk in selected
+    )
+
+    logger.info(
+        f"Final context length: {len(context)} chars"
+    )
+
+    return context

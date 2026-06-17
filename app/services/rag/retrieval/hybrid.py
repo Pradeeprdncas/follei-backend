@@ -1,26 +1,89 @@
-"""Hybrid retrieval: dense + BM25 + RRF + rerank."""
 from app.services.rag.retrieval.dense import retrieve_dense
 from app.services.rag.retrieval.bm25 import retrieve_bm25
 from app.services.rag.retrieval.rrf import rrf_fusion
 from app.services.rag.retrieval.rerank import rerank
-from app.config.settings import get_settings
+from app.services.rag.retrieval.expansion import expand_neighbors
+from app.services.rag.llm.query_expander import generate_queries
+
 from loguru import logger
 
-_settings = get_settings()
 
+async def hybrid_retrieve(
+    query: str,
+    tenant_id: str
+):
 
-async def hybrid_retrieve(query: str, tenant_id: str) -> list[dict]:
-    """
-    Full hybrid retrieval pipeline:
-    1. Dense vector search
-    2. BM25 keyword search
-    3. RRF fusion
-    4. Rerank (passthrough for MVP)
-    Returns top chunks with metadata.
-    """
-    dense_results = await retrieve_dense(query, tenant_id, top_k=_settings.TOP_K_RETRIEVAL)
-    bm25_results = retrieve_bm25(query, tenant_id, top_k=_settings.TOP_K_RETRIEVAL)
-    fused = rrf_fusion(dense_results, bm25_results)
-    ranked = await rerank(query, fused, top_k=_settings.TOP_K_RERANK)
-    logger.info(f"Hybrid retrieve: {len(ranked)} final chunks")
-    return ranked
+    queries = await generate_queries(query)
+
+    logger.info(
+        f"Running retrieval with "
+        f"{len(queries)} query variants"
+    )
+
+    dense_all = []
+    bm25_all = []
+
+    for q in queries:
+
+        logger.info(
+            f"Retrieval query: {q}"
+        )
+
+        dense = await retrieve_dense(
+            q,
+            tenant_id,
+            top_k=50
+        )
+
+        bm25 = retrieve_bm25(
+            q,
+            tenant_id,
+            top_k=50
+        )
+
+        dense_all.extend(dense)
+        bm25_all.extend(bm25)
+
+    fused = rrf_fusion(
+        dense_all,
+        bm25_all
+    )
+
+    logger.info(
+        f"RRF returned "
+        f"{len(fused)} chunks"
+    )
+
+    expanded_chunks = expand_neighbors(
+        [
+            r["chunk_id"]
+            for r in fused[:40]
+        ]
+    )
+
+    logger.info(
+        f"Expansion produced "
+        f"{len(expanded_chunks)} chunks"
+    )
+
+    for i, item in enumerate(
+        expanded_chunks[:10]
+    ):
+
+        logger.info(
+            f"EXPANDED {i+1} | "
+            f"{item['text'][:120]}"
+        )
+
+    reranked = await rerank(
+        query=query,
+        results=expanded_chunks,
+        top_k=60
+    )
+
+    logger.info(
+        f"Reranked down to "
+        f"{len(reranked)} chunks"
+    )
+
+    return reranked

@@ -26,7 +26,7 @@ class Settings(BaseSettings):
     # ── Mistral LLM / Embeddings ────────────
     MISTRAL_API_KEY: str = Field(default="")
     MISTRAL_EMBEDDING_MODEL: str = "mistral-embed"
-    MISTRAL_CHAT_MODEL: str = "mistral-medium"
+    MISTRAL_CHAT_MODEL: str = "mistral-medium-2508"
     MISTRAL_API_BASE: str = "https://api.mistral.ai/v1"
 
     # ── Kafka ─────────────────────────────────

@@ -1,39 +1,53 @@
-"""Hierarchical chunking — preserves heading context."""
-from loguru import logger
-from app.config.settings import get_settings
-
-_settings = get_settings()
+from uuid import uuid4
+from app.services.rag.chunking.adaptive import adaptive_chunk
 
 
-def hierarchy_chunk(pages: list[dict], chunk_size: int | None = None, chunk_overlap: int | None = None) -> list[dict]:
-    """
-    Chunk pages while preserving heading hierarchy.
-    Returns list of {"text": str, "page": int, "heading": str | None, "section": str | None}.
-    """
-    from app.services.rag.chunking.semantic import semantic_chunk
-
-    size = chunk_size or _settings.CHUNK_SIZE
-    overlap = chunk_overlap or _settings.CHUNK_OVERLAP
+def hierarchy_chunk(pages):
 
     chunks = []
-    for page in pages:
-        heading = page.get("heading")
-        section = heading  # section = heading for now
-        page_text = page.get("text", "")
-        if not page_text:
-            continue
 
-        raw_chunks = semantic_chunk(page_text, size, overlap)
-        for i, chunk_text in enumerate(raw_chunks):
-            # Prepend heading context if available
-            if heading and not chunk_text.startswith(heading):
-                chunk_text = f"[{heading}]{chunk_text}"
+    previous_chunk = None
+
+    for page in pages:
+
+        page_number = page["page"]
+
+        text = page["text"]
+
+        heading = page.get("heading")
+
+        adaptive_chunks = adaptive_chunk(text)
+
+        parent_id = str(uuid4())
+
+        for idx, chunk in enumerate(adaptive_chunks):
+
+            chunk_id = str(uuid4())
+
             chunks.append({
-                "text": chunk_text,
-                "page": page.get("page", 0),
+                "chunk_id": chunk_id,
+                "parent_chunk_id": parent_id,
+                "prev_chunk_id": previous_chunk,
+                "next_chunk_id": None,
+
+                "page": page_number,
+
                 "heading": heading,
-                "section": section,
+
+                "section_path": [heading] if heading else [],
+
+                "chunk_index": idx,
+
+                "chunk_type": chunk["chunk_type"],
+
+                "word_count": len(chunk["text"].split()),
+
+                "text": chunk["text"]
             })
 
-    logger.info(f"Hierarchical chunk: {len(pages)} pages → {len(chunks)} chunks")
+            if len(chunks) > 1:
+                chunks[-2]["next_chunk_id"] = chunk_id
+
+            previous_chunk = chunk_id
+
     return chunks

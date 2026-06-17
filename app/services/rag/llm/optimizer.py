@@ -33,6 +33,8 @@ Respond ONLY with the JSON block."""
     try:
         async with httpx.AsyncClient(timeout=30.0) as client:
             resp = await client.post(
+                
+                
                 f"{_settings.MISTRAL_API_BASE}/chat/completions",
                 headers={"Authorization": f"Bearer {_settings.MISTRAL_API_KEY}"},
                 json={
@@ -45,6 +47,10 @@ Respond ONLY with the JSON block."""
                     "temperature": 0.1,
                 },
             )
+            logger.info(f"MISTRAL_API_BASE={repr(_settings.MISTRAL_API_BASE)}")
+            logger.info(f"MISTRAL_CHAT_MODEL={repr(_settings.MISTRAL_CHAT_MODEL)}")
+            logger.info(f"MISTRAL_API_KEY_EXISTS={bool(_settings.MISTRAL_API_KEY)}")
+                
             resp.raise_for_status()
             import json
             result = json.loads(resp.json()["choices"][0]["message"]["content"].strip())

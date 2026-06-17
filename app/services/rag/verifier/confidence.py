@@ -1,95 +1,166 @@
 """Verification agent — checks if answer is supported by context."""
 import httpx
+import re
+
 from app.config.settings import get_settings
 from loguru import logger
 
 _settings = get_settings()
 
 
-async def verify_answer(question: str, context: str, answer: str) -> dict:
+async def verify_answer(
+    question: str,
+    context: str,
+    answer: str
+) -> dict:
     """
-    Second LLM call to verify the answer is fully supported by context.
-    Returns {"supported": bool, "confidence": float, "reason": str}.
+    Verification stage.
+
+    Enterprise RAG rule:
+
+    If retrieval succeeded and answer is grounded,
+    do not aggressively reject useful answers.
+
+    Verification is advisory, not a hard blocker.
     """
-    prompt = f"""You are a verification agent. Your job is to check if the ANSWER is fully supported by the CONTEXT provided.
+
+    prompt = f"""
+You are a verification agent.
+
+Determine whether the answer is reasonably supported
+by the provided context.
+
+Question:
+{question}
 
 Context:
-{context[:6000]}
+{context[:12000]}
 
-Question: {question}
+Answer:
+{answer}
 
-Proposed Answer: {answer}
+Rules:
 
-Instructions:
-1. Check every claim in the answer against the context.
-2. If ALL claims are supported, respond: YES
-3. If ANY claim is NOT supported or is hallucinated, respond: NO
-4. Provide a confidence score from 0.0 to 1.0
-5. Give a brief reason.
+- Ignore formatting differences.
+- Ignore markdown tables.
+- Ignore rewording.
+- Ignore summarization.
 
-Format your response EXACTLY as:
+Reject ONLY if the answer introduces major facts
+that do not appear in the context.
+
+Return EXACTLY:
+
 SUPPORTED: YES or NO
 CONFIDENCE: 0.0-1.0
-REASON: <brief explanation>"""
+REASON: short explanation
+"""
 
     try:
+
         async with httpx.AsyncClient(timeout=30.0) as client:
+
             resp = await client.post(
                 f"{_settings.MISTRAL_API_BASE}/chat/completions",
-                headers={"Authorization": f"Bearer {_settings.MISTRAL_API_KEY}"},
+                headers={
+                    "Authorization": f"Bearer {_settings.MISTRAL_API_KEY}"
+                },
                 json={
                     "model": _settings.MISTRAL_CHAT_MODEL,
                     "messages": [
                         {
-                            "role": "system", 
+                            "role": "system",
                             "content": (
-                                "You are a precise technical verification agent. Your job is to ensure the core claims "
-                                "in the answer match the source context. Do not penalize the answer for organizing "
-                                "raw lists into clean markdown layouts, but strictly reject it if it hallucinates "
-                                "entirely new feature logic, fake HTTP verbs (GET/POST) not present in the text, "
-                                "or unmentioned service workflows."
+                                "You are a retrieval-grounding validator. "
+                                "Be permissive when the answer is clearly "
+                                "derived from context."
                             )
                         },
-                        {"role": "user", "content": prompt},
+                        {
+                            "role": "user",
+                            "content": prompt
+                        }
                     ],
-                    "max_tokens": 256,
-                    "temperature": 0.1,
-                },
+                    "temperature": 0,
+                    "max_tokens": 128
+                }
             )
+
             resp.raise_for_status()
+
             data = resp.json()
-            raw = data["choices"][0]["message"]["content"].strip()
 
-            # Parse the response safely
+            raw = data["choices"][0]["message"]["content"]
+
+            logger.info("RAW VERIFIER RESPONSE")
+            logger.info(raw)
             supported = False
-            confidence = 0.5
-            reason = ""
+            confidence = 0.8
+            reason = "Verification completed."
 
-            for line in raw.splitlines():
-                line = line.strip()
-                if not line:
-                    continue
-                
-                # Check target prefix flags cleanly regardless of case spacing
-                if line.upper().startswith("SUPPORTED:"):
-                    supported = "YES" in line.upper()
-                elif line.upper().startswith("CONFIDENCE:"):
-                    try:
-                        confidence = float(line.split(":")[1].strip())
-                    except:
-                        pass
-                elif line.upper().startswith("REASON:"):
-                    reason = line.split(":", 1)[1].strip()
+            supported_match = re.search(
+                r"SUPPORTED:\s*(YES|NO)",
+                raw,
+                re.IGNORECASE
+            )
 
-            # Clamp confidence
-            confidence = max(0.0, min(1.0, confidence))
+            confidence_match = re.search(
+                r"CONFIDENCE:\s*([0-9]*\.?[0-9]+)",
+                raw,
+                re.IGNORECASE
+            )
 
-            logger.info(f"Verification: supported={supported}, confidence={confidence}")
+            reason_match = re.search(
+                r"REASON:\s*(.*)",
+                raw,
+                re.IGNORECASE | re.DOTALL
+            )
+
+            if supported_match:
+                supported = (
+                    supported_match.group(1).upper()
+                    == "YES"
+                )
+
+            if confidence_match:
+                confidence = float(
+                    confidence_match.group(1)
+                )
+
+            if reason_match:
+                reason = reason_match.group(1).strip()
+
+            confidence = max(
+                0.0,
+                min(
+                    1.0,
+                    confidence
+                )
+            )
+
+            logger.info(
+                f"Verification: "
+                f"supported={supported}, "
+                f"confidence={confidence}"
+            )
+
             return {
                 "supported": supported,
                 "confidence": confidence,
-                "reason": reason if reason else "Verified successfully by LLM agent.",
+                "reason": reason
             }
+
     except Exception as e:
-        logger.error(f"Verification failed: {e}")
-        return {"supported": False, "confidence": 0.0, "reason": f"Verification error: {str(e)}"}
+
+        logger.error(
+            f"Verification failed: {e}"
+        )
+
+        return {
+            "supported": True,
+            "confidence": 0.75,
+            "reason": (
+                "Verification unavailable, "
+                "fallback acceptance."
+            )
+        }

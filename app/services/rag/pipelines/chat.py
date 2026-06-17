@@ -30,7 +30,14 @@ async def chat_pipeline(question: str, tenant_id: str, session_id: str | None = 
 
     # 2. Retrieve context using the CLEAN rewritten query vector text
     context, chunk_ids = await retrieve_context(search_query, tenant_id)
+    logger.info("=" * 80)
+    logger.info("RETRIEVED CHUNK IDS")
+    logger.info(chunk_ids)
 
+    logger.info("=" * 80)
+    logger.info("RETRIEVED CONTEXT")
+    logger.info(context[:5000])
+    logger.info("=" * 80)
     if not context:
         logger.warning(f"No semantic contexts matched search query for tenant: {tenant_id}")
         return {
@@ -47,7 +54,10 @@ async def chat_pipeline(question: str, tenant_id: str, session_id: str | None = 
         context=context, 
         system_prompt=tailored_system_prompt
     )
-
+    logger.info("=" * 80)
+    logger.info("GENERATED ANSWER")
+    logger.info(answer)
+    logger.info("=" * 80)
     # 4. Verify candidate answer against retrieved context text blocks
     verification = await verify_answer(question, context, answer)
 
