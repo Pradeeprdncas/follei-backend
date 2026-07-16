@@ -1,0 +1,99 @@
+@echo off
+setlocal EnableExtensions
+
+set "ROOT=%~dp0"
+set "PYTHON=%ROOT%follei_backend\indic_tts_venv\Scripts\python.exe"
+set "PORT=8002"
+
+rem Local development service endpoints (override these in your environment if needed)
+set "DATABASE_URL=postgresql://admin:secret@localhost:55589/follei_db"
+set "REDIS_URL=redis://localhost:6379"
+set "QDRANT_URL=http://localhost:6333"
+set "KAFKA_BOOTSTRAP_SERVERS=localhost:9092"
+set "FERRETDB_URL=mongodb://localhost:27017/ferret_context"
+set "FERRETDB_DATABASE=ferret_context"
+
+cd /d "%ROOT%"
+echo.
+echo ========================================
+echo        Follei startup
+echo ========================================
+echo Root: %ROOT%
+
+if not exist "%PYTHON%" (
+  echo [ERROR] Python runtime not found:
+  echo         %PYTHON%
+  echo Create the canonical venv before starting Follei.
+  pause
+  exit /b 1
+)
+
+set "COMPOSE_FILE="
+if exist "%ROOT%docker-compose.yml" set "COMPOSE_FILE=%ROOT%docker-compose.yml"
+if not defined COMPOSE_FILE if exist "%ROOT%follei_backend\follei\docker-compose.yml" set "COMPOSE_FILE=%ROOT%follei_backend\follei\docker-compose.yml"
+
+if defined COMPOSE_FILE (
+  echo [INFO] Starting Docker services from:
+  echo        %COMPOSE_FILE%
+  docker compose -f "%COMPOSE_FILE%" up -d postgres redis qdrant ferretdb-postgres ferretdb zookeeper kafka
+  if errorlevel 1 (
+    echo [WARN] Docker Compose could not start all services.
+    echo        Continuing so existing services can still be used.
+  )
+) else (
+  echo [INFO] No Compose file found in the active checkout.
+  echo        Using already-running Docker services.
+)
+
+call :check_url "Qdrant" "http://localhost:6333/readyz"
+call :check_port "FerretDB" 27017
+call :check_port "PostgreSQL" 55589
+call :check_port "Redis" 6379
+call :check_port "Kafka" 9092
+
+for /f "tokens=5" %%P in ('netstat -ano ^| findstr /R /C:":%PORT% .*LISTENING"') do (
+  echo [WARN] Port %PORT% is already in use by PID %%P. The API may already be running.
+  goto :after_port_check
+)
+:after_port_check
+
+echo [INFO] Starting Follei API on port %PORT%...
+start "Follei API" /D "%ROOT%" "%PYTHON%" -m uvicorn app.main:app --reload
+
+timeout /t 3 /nobreak >nul
+call :check_url "Follei API" "http://localhost:%PORT%/health/"
+
+echo.
+echo Follei startup command completed.
+echo API:     http://localhost:%PORT%
+echo Docs:    http://localhost:%PORT%/docs
+echo Chat:    http://localhost:%PORT%/chat/
+echo Review:  http://localhost:%PORT%/knowledge/review/drafts
+endlocal
+exit /b 0
+
+:check_url
+set "CHECK_NAME=%~1"
+set "CHECK_URL=%~2"
+for /l %%N in (1,1,10) do (
+  powershell -NoProfile -ExecutionPolicy Bypass -Command "try { $r=Invoke-WebRequest -UseBasicParsing -TimeoutSec 2 '%CHECK_URL%'; if($r.StatusCode -ge 200 -and $r.StatusCode -lt 500){ exit 0 } } catch {} ; exit 1" >nul 2>&1
+  if not errorlevel 1 (
+    echo [OK] %CHECK_NAME% ready: %CHECK_URL%
+    exit /b 0
+  )
+  timeout /t 1 /nobreak >nul
+)
+echo [WARN] %CHECK_NAME% not reachable yet: %CHECK_URL%
+exit /b 0
+
+:check_port
+set "CHECK_NAME=%~1"
+set "CHECK_PORT=%~2"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "if((Test-NetConnection localhost -Port %CHECK_PORT% -WarningAction SilentlyContinue).TcpTestSucceeded){exit 0}else{exit 1}" >nul 2>&1
+if not errorlevel 1 (
+  echo [OK] %CHECK_NAME% port %CHECK_PORT% reachable
+) else (
+  echo [WARN] %CHECK_NAME% port %CHECK_PORT% not reachable
+)
+exit /b 0
+

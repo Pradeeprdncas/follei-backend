@@ -3,11 +3,12 @@ from app.config.qdrant import get_qdrant
 from app.services.rag.embeddings.mistral import embed_texts
 from app.config.settings import get_settings
 from loguru import logger
+from app.services.rag.retrieval.approval import approved_filter, requires_approval
 
 _settings = get_settings()
 
 
-async def retrieve_dense(query: str, tenant_id: str, top_k: int = 5) -> list[dict]:
+async def retrieve_dense(query: str, tenant_id: str, top_k: int = 5, category: str | None = None, require_approved: bool | None = None) -> list[dict]:
     """Retrieves contextually relevant document chunks via dense vector lookup."""
     client = get_qdrant()
     collection_name = _settings.QDRANT_COLLECTION_NAME
@@ -26,7 +27,7 @@ async def retrieve_dense(query: str, tenant_id: str, top_k: int = 5) -> list[dic
             query=query_vector,  # Modern parameter accepts raw list[float]
             limit=top_k,
             # Filter matches by user tenancy boundary if applicable
-            query_filter={"must": [{"key": "tenant_id", "match": {"value": tenant_id}}]} if tenant_id else None
+            query_filter=approved_filter(tenant_id, require_approved=requires_approval(query, category) if require_approved is None else require_approved) if tenant_id else None
         )
 
         # 3. Formulate standard chunk dictionaries from ScoredPoints list
@@ -39,7 +40,13 @@ async def retrieve_dense(query: str, tenant_id: str, top_k: int = 5) -> list[dic
                 "text": payload.get("text", ""),
                 "page": payload.get("page", 0),
                 "heading": payload.get("heading"),
-                "chunk_index": payload.get("chunk_index", 0)
+                "chunk_index": payload.get("chunk_index", 0),
+                "heading_path": payload.get("heading_path") or payload.get("section_path", []),
+                "approval_status": payload.get("approval_status", "draft"),
+                "source_type": payload.get("source_type"),
+                "sensitivity": payload.get("sensitivity"),
+                "document_id": payload.get("document_id"),
+                "tenant_id": payload.get("tenant_id")
             })
 
         logger.info(f"Dense vector search retrieved {len(results)} matches.")

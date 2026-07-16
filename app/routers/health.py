@@ -1,5 +1,6 @@
 """Health check endpoints."""
 from fastapi import APIRouter
+from sqlalchemy import text
 from app.config.database import engine
 from app.config.redis import get_redis
 from app.config.qdrant import get_qdrant
@@ -22,7 +23,7 @@ async def health_check():
 
     try:
         with engine.connect() as conn:
-            conn.execute("SELECT 1")
+            conn.execute(text("SELECT 1"))
         status["postgres"] = "ok"
     except Exception as e:
         status["postgres"] = f"error: {e}"

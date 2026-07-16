@@ -1,4 +1,4 @@
-"""End-to-end indexing pipeline: file → chunks → embeddings → Qdrant + PostgreSQL."""
+"""End-to-end indexing pipeline: file Ã¢â€ â€™ chunks Ã¢â€ â€™ embeddings Ã¢â€ â€™ Qdrant + PostgreSQL."""
 from pathlib import Path
 import uuid
 from sqlalchemy.orm import Session
@@ -9,7 +9,7 @@ from app.models.chunk import Chunk
 from app.repositories.document import DocumentRepository
 from app.repositories.chunk import ChunkRepository
 from app.services.rag.parsing.parser import parse_file
-from app.services.rag.chunking.hierarchy import hierarchy_chunk
+from app.services.rag.chunking.registry import chunk_document
 from app.services.rag.metadata.extractor import extract_chunk_metadata, extract_document_metadata
 from app.services.rag.metadata.summarizer import summarize_text
 from app.services.rag.metadata.keywords import extract_keywords
@@ -51,7 +51,7 @@ async def index_document(file_path: str, tenant_id: str, db: Session | None = No
         doc.total_pages = len(pages)
 
         # 3. Chunk
-        chunks_data = hierarchy_chunk(pages)
+        chunks_data = chunk_document(file_path, pages, metadata={"source_type": path.suffix.lower().lstrip(".")})
         logger.info(f"Created {len(chunks_data)} chunks")
 
         # 4. Extract metadata
@@ -108,7 +108,7 @@ async def index_document(file_path: str, tenant_id: str, db: Session | None = No
 
                 word_count=chunk_data.get("word_count"),
 
-                tags=keywords[:5],
+                tags=keywords[:5] + [f"category:{chunk_data.get('chunk_type')}", f"approval:{chunk_data.get('approval_status', 'draft')}"],
 
                 permissions=[]
             )
@@ -157,7 +157,11 @@ async def index_document(file_path: str, tenant_id: str, db: Session | None = No
 
                     "word_count": c.word_count,
 
-                    "tags": c.tags
+                    "tags": c.tags,
+                    "heading_path": c.section_path or [],
+                    "approval_status": "approved" if False else "draft",
+                    "sensitivity": "internal",
+                    "source_type": path.suffix.lower().lstrip(".")
                 })
 
                             # 7. Insert into Qdrant
@@ -177,3 +181,4 @@ async def index_document(file_path: str, tenant_id: str, db: Session | None = No
     finally:
         if close_db:
             db.close()
+
