@@ -22,3 +22,14 @@ htmlcov/
 dist/
 build/
 *.egg-info/
+
+# Local runtime state and preserved workspace material
+AI_MODELS/
+/models/
+lora-*/
+eval_output/
+unused/
+follei_backend/
+_check_*.py
+_test_*.py
+_verify_*.py
