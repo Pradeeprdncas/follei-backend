@@ -2,6 +2,7 @@
 from rank_bm25 import BM25Okapi
 from app.repositories.chunk import ChunkRepository
 from app.config.database import SessionLocal
+from app.services.rag.retrieval.approval import chunk_tags_approved
 from loguru import logger
 import re
 
@@ -25,15 +26,19 @@ def retrieve_bm25(query: str, tenant_id: str, top_k: int = 20) -> list[dict]:
     db = SessionLocal()
     try:
         repo = ChunkRepository(db)
-        rows = repo.get_texts_for_bm25(tenant_id)
+        all_chunks = repo.get_texts_for_bm25(tenant_id)
+        # Unconditional approval filter: unlike Qdrant's keyword-conditional check,
+        # Postgres chunk text has no per-query approval signal to weigh against, so
+        # draft/unapproved chunk text must never reach BM25 scoring at all.
+        rows = [c for c in all_chunks if chunk_tags_approved(c.tags)]
 
         if not rows:
-            logger.warning(f"No chunks found for tenant={tenant_id}")
+            logger.warning(f"No approved chunks found for tenant={tenant_id}")
             return []
 
         # Parse text chunks cleanly
-        chunk_ids = [r[0] for r in rows]
-        texts = [r[1] if r[1] is not None else "" for r in rows]
+        chunk_ids = [r.id for r in rows]
+        texts = [r.content if r.content is not None else "" for r in rows]
         tokenized = [tokenize(t) for t in texts]
 
         # FIX: Safety Guard — If text extraction yields zero valid tokens across all items,

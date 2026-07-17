@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 
 from app.database.session import get_db
 from app.services.knowledge.conversation_memory import get_conversation_history
+from app.core.security import get_authenticated_tenant_id, require_matching_tenant
 
 router = APIRouter(prefix="/knowledge/conversations", tags=["knowledge-conversations"])
 
@@ -37,7 +38,12 @@ class TurnRequest(BaseModel):
 
 
 @router.post("/turns")
-async def persist_turn(payload: TurnRequest, db: Session = Depends(get_db)):
+async def persist_turn(
+    payload: TurnRequest,
+    db: Session = Depends(get_db),
+    authenticated_tenant_id: str = Depends(get_authenticated_tenant_id),
+):
+    require_matching_tenant(payload.tenant_id, authenticated_tenant_id)
     from app.services.knowledge.conversation_memory import persist_structured_turn, summarize_conversation
     conversation, message, created = persist_structured_turn(db, **payload.model_dump())
     summary = await summarize_conversation(tenant_id=payload.tenant_id, conversation_id=conversation.id)

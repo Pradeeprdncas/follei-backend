@@ -1,5 +1,6 @@
 from app.config.database import SessionLocal
 from app.repositories.chunk import ChunkRepository
+from app.services.rag.retrieval.approval import chunk_tags_approved
 
 
 def expand_neighbors(chunk_ids):
@@ -19,7 +20,10 @@ def expand_neighbors(chunk_ids):
 
             chunk = repo.get_by_id(cid)
 
-            if not chunk:
+            # Unconditional approval filter, matching the BM25 policy: a draft
+            # chunk must not seed neighbor expansion, and unapproved neighbors
+            # must not be pulled in even if the seed chunk itself is approved.
+            if not chunk or not chunk_tags_approved(chunk.tags):
                 continue
 
             neighbors = [
@@ -36,7 +40,7 @@ def expand_neighbors(chunk_ids):
 
                 neighbor = repo.get_by_id(neighbor_id)
 
-                if not neighbor:
+                if not neighbor or not chunk_tags_approved(neighbor.tags):
                     continue
 
                 expanded[str(neighbor.id)] = {

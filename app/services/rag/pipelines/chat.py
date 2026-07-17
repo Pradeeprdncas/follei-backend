@@ -8,10 +8,44 @@ from app.services.rag.verifier.confidence import verify_answer
 from app.services.rag.telemetry import LatencyTrace
 from app.config.settings import get_settings
 from app.config.database import SessionLocal
+from app.services.knowledge.orchestrator import build_agent_context
 from app.services.knowledge.conversation_memory import ConversationScopeError, persist_chat_turn, summarize_conversation
 from loguru import logger
 
 _settings = get_settings()
+
+_MAX_FACTS_IN_CONTEXT = 5
+
+
+def _format_agent_context(agent_context: dict) -> str:
+    """Render orchestrator facts/customer memory as an extra grounded-context block."""
+    sections: list[str] = []
+    approved = (agent_context.get("facts") or {}).get("approved") or []
+    if approved:
+        lines = [
+            f"- ({fact.get('fact_type')}) {fact.get('topic')}: {fact.get('value')}"
+            for fact in approved[:_MAX_FACTS_IN_CONTEXT]
+        ]
+        sections.append("APPROVED BUSINESS FACTS (source: Postgres, human-approved):\n" + "\n".join(lines))
+    customer_context = agent_context.get("customer_context") or {}
+    if customer_context:
+        sections.append(f"CUSTOMER CONTEXT (source: FerretDB memory): {customer_context}")
+    return "\n\n".join(sections)
+
+
+def _fact_citations(agent_context: dict) -> list[dict]:
+    """Citations for approved Postgres facts, distinct from raw Qdrant chunk citations."""
+    approved = (agent_context.get("facts") or {}).get("approved") or []
+    return [
+        {
+            "source": "postgres_fact",
+            "fact_id": fact.get("fact_id"),
+            "fact_type": fact.get("fact_type"),
+            "topic": fact.get("topic"),
+            "citation": fact.get("citation"),
+        }
+        for fact in approved[:_MAX_FACTS_IN_CONTEXT]
+    ]
 
 
 async def chat_pipeline(question: str, tenant_id: str, session_id: str | None = None) -> dict:
@@ -29,28 +63,59 @@ async def chat_pipeline(question: str, tenant_id: str, session_id: str | None = 
 
         context, chunk_ids = await retrieve_context(search_query, tenant_id)
         trace.mark("retrieve_context")
-        if not context:
-            result = {"answer": "I don't have enough information to answer that question.", "citations": [], "confidence": 0.0, "supported": False, "reason": "No relevant documents found."}
+
+        # Merge orchestrator context: approved Postgres facts, graph relationships,
+        # and FerretDB customer/lead memory are layered on top of hybrid chunk
+        # retrieval rather than replacing it — build_agent_context()'s own
+        # "evidence" field is dense-only and would drop BM25/rerank/neighbor
+        # expansion coverage if used as a substitute for retrieve_context().
+        orchestrator_db = SessionLocal()
+        try:
+            agent_context = await build_agent_context(db=orchestrator_db, tenant_id=tenant_id, query=search_query)
+        except Exception as exc:
+            logger.warning(f"Orchestrator context unavailable, continuing with hybrid retrieval only: {exc}")
+            agent_context = {"facts": {"approved": []}, "relationships": [], "customer_context": {}, "conflicts": []}
+        finally:
+            orchestrator_db.close()
+        trace.mark("orchestrator_context")
+
+        agent_context_text = _format_agent_context(agent_context)
+        combined_context = "\n\n".join(part for part in (context, agent_context_text) if part)
+        conflicts = agent_context.get("conflicts") or []
+
+        if not combined_context:
+            result = {"answer": "I don't have enough information to answer that question.", "citations": [], "confidence": 0.0, "supported": False, "reason": "No relevant documents found.", "conflicts": []}
+        elif conflicts:
+            # Approved Postgres facts disagree for this question's topic. Never let
+            # the LLM silently pick one side — surface the conflict instead of an answer.
+            result = {
+                "answer": "Multiple approved records disagree on this; it needs human review before I can answer confidently.",
+                "citations": _fact_citations(agent_context),
+                "confidence": 0.0,
+                "supported": False,
+                "reason": "Conflicting approved facts require human review.",
+                "conflicts": conflicts,
+            }
         else:
-            answer = await generate_answer(question=question, context=context, system_prompt=tailored_system_prompt)
+            answer = await generate_answer(question=question, context=combined_context, system_prompt=tailored_system_prompt)
             trace.mark("answer_llm")
 
             if _settings.RAG_ENABLE_LLM_VERIFICATION:
-                verification = await verify_answer(question, context, answer)
+                verification = await verify_answer(question, combined_context, answer)
             else:
                 verification = {"supported": True, "confidence": 0.7, "reason": "Grounded answer produced from retrieved context; LLM verification disabled for the fast path."}
             trace.mark("verify")
 
             if verification["confidence"] < _settings.MIN_CONFIDENCE or not verification["supported"]:
-                result = {"answer": "I don't have enough information to answer that question confidently.", "citations": [], "confidence": verification["confidence"], "supported": verification["supported"], "reason": verification["reason"]}
+                result = {"answer": "I don't have enough information to answer that question confidently.", "citations": [], "confidence": verification["confidence"], "supported": verification["supported"], "reason": verification["reason"], "conflicts": []}
             else:
-                citations = extract_citations(chunk_ids)
+                citations = extract_citations(chunk_ids) + _fact_citations(agent_context)
                 trace.mark("citations")
-                result = {"answer": answer, "citations": citations, "confidence": verification["confidence"], "supported": verification["supported"], "reason": verification["reason"]}
+                result = {"answer": answer, "citations": citations, "confidence": verification["confidence"], "supported": verification["supported"], "reason": verification["reason"], "conflicts": []}
 
         db = SessionLocal()
         try:
-            conversation = persist_chat_turn(db, tenant_id=tenant_id, session_id=session_id, question=question, **result)
+            conversation = persist_chat_turn(db, tenant_id=tenant_id, session_id=session_id, question=question, answer=result["answer"], citations=result["citations"], confidence=result["confidence"], supported=result["supported"], reason=result["reason"])
             result["conversation_id"] = str(conversation.id)
         except ConversationScopeError:
             db.rollback()
@@ -58,6 +123,21 @@ async def chat_pipeline(question: str, tenant_id: str, session_id: str | None = 
         except Exception as exc:
             db.rollback()
             logger.warning(f"Chat answer returned without durable conversation persistence: {exc}")
+            db.close()
+            return result
+        else:
+            # Best-effort structured summary + outbox event so FerretDB/graph memory
+            # actually gets refreshed from normal chat use, not only from the
+            # dedicated /knowledge/conversations/turns path. This reuses the existing
+            # summarize_conversation() outbox wiring rather than duplicating it.
+            # Follow-up (explicitly out of scope here): ChatRequest has no
+            # customer_id/lead_id, so this conversation is not yet linked to a
+            # specific customer/lead subject the way persist_structured_turn's
+            # callers can be — only the rolling free-text summary path is triggered.
+            try:
+                await summarize_conversation(tenant_id=tenant_id, conversation_id=conversation.id)
+            except Exception as exc:
+                logger.warning(f"Structured conversation summary/outbox sync skipped: {exc}")
         finally:
             db.close()
         return result

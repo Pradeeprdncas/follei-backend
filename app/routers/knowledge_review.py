@@ -13,6 +13,9 @@ from app.models.knowledge.fact_draft import BusinessFactDraft
 from app.services.knowledge.fact_publishing import publish_fact_draft
 from app.services.knowledge.graph import sync_approved_fact_to_graph
 from app.services.knowledge.outbox import enqueue_sync_event
+from app.core.security import get_authenticated_tenant_id, require_matching_tenant
+from app.repositories.chunk import ChunkRepository
+from app.services.rag.retrieval.approval import approval_tag_for
 
 router = APIRouter(prefix="/knowledge/review", tags=["knowledge-review"])
 _settings = get_settings()
@@ -45,8 +48,15 @@ def _draft_response(draft: BusinessFactDraft) -> dict:
 
 
 @router.get("/facts/drafts")
-def list_fact_drafts(tenant_id: UUID, status: str = "draft", limit: int = 50, db: Session = Depends(get_db)):
+def list_fact_drafts(
+    tenant_id: UUID,
+    status: str = "draft",
+    limit: int = 50,
+    db: Session = Depends(get_db),
+    authenticated_tenant_id: str = Depends(get_authenticated_tenant_id),
+):
     """List a tenant's extracted facts with their source citations."""
+    require_matching_tenant(tenant_id, authenticated_tenant_id)
     rows = db.query(BusinessFactDraft).filter(
         BusinessFactDraft.tenant_id == tenant_id,
         BusinessFactDraft.approval_status == status,
@@ -66,8 +76,14 @@ def get_fact_draft(draft_id: UUID, tenant_id: UUID, db: Session = Depends(get_db
 
 
 @router.post("/facts/{draft_id}/approve")
-def approve_fact_draft(draft_id: UUID, action: ReviewAction, db: Session = Depends(get_db)):
+def approve_fact_draft(
+    draft_id: UUID,
+    action: ReviewAction,
+    db: Session = Depends(get_db),
+    authenticated_tenant_id: str = Depends(get_authenticated_tenant_id),
+):
     """Publish one reviewed draft to its approved PostgreSQL entity table."""
+    require_matching_tenant(action.tenant_id, authenticated_tenant_id)
     draft = db.query(BusinessFactDraft).filter(
         BusinessFactDraft.id == draft_id,
         BusinessFactDraft.tenant_id == UUID(action.tenant_id),
@@ -131,16 +147,16 @@ def list_drafts(tenant_id: str, limit: int = 50):
 
 
 @router.post("/{chunk_id}/approve")
-def approve_draft(chunk_id: str, action: ReviewAction):
-    return _set_status(chunk_id, action, "approved")
+def approve_draft(chunk_id: str, action: ReviewAction, db: Session = Depends(get_db)):
+    return _set_status(chunk_id, action, "approved", db)
 
 
 @router.post("/{chunk_id}/reject")
-def reject_draft(chunk_id: str, action: ReviewAction):
-    return _set_status(chunk_id, action, "rejected")
+def reject_draft(chunk_id: str, action: ReviewAction, db: Session = Depends(get_db)):
+    return _set_status(chunk_id, action, "rejected", db)
 
 
-def _set_status(chunk_id: str, action: ReviewAction, status: str):
+def _set_status(chunk_id: str, action: ReviewAction, status: str, db: Session):
     client = get_qdrant()
     points = client.retrieve(collection_name=_settings.QDRANT_COLLECTION_NAME, ids=[chunk_id], with_payload=True)
     if not points or (points[0].payload or {}).get("tenant_id") != action.tenant_id:
@@ -149,6 +165,13 @@ def _set_status(chunk_id: str, action: ReviewAction, status: str):
     if action.reason:
         payload["review_reason"] = action.reason
     client.set_payload(collection_name=_settings.QDRANT_COLLECTION_NAME, points=[chunk_id], payload=payload)
+    # Keep the Postgres chunk's approval tag in sync with Qdrant so BM25 and
+    # neighbor expansion (which read Postgres, not Qdrant) agree on what's approved.
+    chunk_repo = ChunkRepository(db)
+    chunk = chunk_repo.get_by_id(chunk_id)
+    if chunk:
+        remaining_tags = [t for t in (chunk.tags or []) if not t.startswith("approval:")]
+        chunk_repo.set_tags(chunk_id, remaining_tags + [approval_tag_for(status)])
     return {"chunk_id": chunk_id, "tenant_id": action.tenant_id, "approval_status": status, "reviewer": action.reviewer}
 
 

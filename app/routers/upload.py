@@ -1,11 +1,12 @@
 ﻿"""Upload endpoint: persist a source and queue canonical indexing metadata."""
-from fastapi import APIRouter, UploadFile, File, Form, HTTPException
+from fastapi import APIRouter, UploadFile, File, Form, HTTPException, Depends
 from pathlib import Path
 import shutil
 import uuid
 from app.config.settings import get_settings
 from app.config.kafka import get_producer, ensure_topics
 from app.services.rag.document_identity import stable_upload_uri
+from app.core.security import get_authenticated_tenant_id, require_matching_tenant
 from loguru import logger
 
 router = APIRouter(prefix="/upload", tags=["upload"])
@@ -20,8 +21,10 @@ async def upload_file(
     tenant_id: str = Form(...),
     source_uri: str | None = Form(None),
     uploaded_by: str | None = Form(None),
+    authenticated_tenant_id: str = Depends(get_authenticated_tenant_id),
 ):
     """Save a source and queue its idempotent versioned indexing job."""
+    require_matching_tenant(tenant_id, authenticated_tenant_id)
     if not file.filename:
         raise HTTPException(status_code=400, detail="No file provided")
     job_id = str(uuid.uuid4())

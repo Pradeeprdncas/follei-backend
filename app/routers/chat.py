@@ -1,8 +1,9 @@
 ﻿"""Chat endpoint â€” RAG question answering."""
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 from app.services.rag.pipelines.chat import chat_pipeline
 from app.services.knowledge.conversation_memory import ConversationScopeError
+from app.core.security import get_authenticated_tenant_id, require_matching_tenant
 from loguru import logger
 
 router = APIRouter(prefix="/chat", tags=["chat"])
@@ -21,6 +22,7 @@ class ChatResponse(BaseModel):
     supported: bool = Field(..., description="True if truth claims perfectly match the database context chunks.")
     reason: str = Field(..., description="System diagnostic overview details from the verification engine.")
     conversation_id: str | None = Field(None, description="Canonical persisted conversation UUID for the next turn.")
+    conflicts: list[dict] = Field(default=[], description="Unresolved disagreements between approved facts; non-empty means the answer was withheld pending human review.")
 
 
 @router.post(
@@ -30,13 +32,14 @@ class ChatResponse(BaseModel):
     summary="Submit query to Verified RAG Pipeline",
     description="Processes raw text inputs through an AI query optimizer layer, searches isolated vector embeddings spaces, and validates output constraints."
 )
-async def chat(request: ChatRequest):
+async def chat(request: ChatRequest, authenticated_tenant_id: str = Depends(get_authenticated_tenant_id)):
     """
     Accepts raw customer queries, executes intent routing, checks context boundaries, and returns verified truth statements.
     """
+    require_matching_tenant(request.tenant_id, authenticated_tenant_id)
     if not request.question.strip():
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST, 
+            status_code=status.HTTP_400_BAD_REQUEST,
             detail="Question argument parameter cannot consist of empty whitespace values."
         )
 
