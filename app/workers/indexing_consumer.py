@@ -1,4 +1,4 @@
-"""Kafka consumer that processes document indexing jobs."""
+﻿"""Kafka consumer that processes document indexing jobs."""
 import sys
 import signal
 from app.config.kafka import get_consumer, ensure_topics
@@ -31,17 +31,20 @@ class IndexingWorker:
                     break
 
                 data = message.value
-                logger.info(f"Received indexing job: {data.get('document_id')}")
+                logger.info(f"Received indexing job: {data.get('job_id')}")
 
                 try:
                     import asyncio
                     asyncio.run(index_document(
                         file_path=data["file_path"],
                         tenant_id=data["tenant_id"],
+                        source_uri=data.get("source_uri"),
+                        original_filename=data.get("filename"),
+                        uploaded_by=data.get("uploaded_by"),
                     ))
-                    logger.info(f"Successfully indexed document {data['document_id']}")
+                    logger.info(f"Successfully indexed document {data['job_id']}")
                 except Exception as e:
-                    logger.error(f"Failed to index document {data.get('document_id')}: {e}")
+                    logger.error(f"Failed to index document {data.get('job_id')}: {e}")
                     # Message will be retried based on Kafka config
 
         except Exception as e:
@@ -54,3 +57,5 @@ class IndexingWorker:
 if __name__ == "__main__":
     worker = IndexingWorker()
     worker.run()
+
+

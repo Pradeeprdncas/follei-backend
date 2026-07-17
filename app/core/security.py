@@ -8,10 +8,14 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 from uuid import UUID
 
+from fastapi import Depends, HTTPException, status
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+
 
 SECRET_KEY = os.getenv("SECRET_KEY", "dev-secret-change-me")
 ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "60"))
 HASH_ITERATIONS = 120_000
+bearer_scheme = HTTPBearer(auto_error=False)
 
 
 def hash_password(password: str) -> str:
@@ -72,6 +76,30 @@ def decode_access_token(token: str) -> dict[str, Any]:
     if int(payload.get("exp", 0)) < int(datetime.now(timezone.utc).timestamp()):
         raise ValueError("Token expired")
     return payload
+
+
+def get_authenticated_tenant_id(
+    credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
+) -> str:
+    """Return the tenant claim from a valid bearer token for tenant-scoped APIs."""
+    if credentials is None:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing bearer token")
+    try:
+        payload = decode_access_token(credentials.credentials)
+        return str(UUID(str(payload["tenant_id"])))
+    except (KeyError, TypeError, ValueError):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
+
+
+def require_matching_tenant(requested_tenant_id: str | UUID, authenticated_tenant_id: str) -> str:
+    """Reject a caller-supplied tenant identifier that differs from the JWT claim."""
+    try:
+        requested = str(UUID(str(requested_tenant_id)))
+    except ValueError:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Invalid tenant identifier")
+    if requested != authenticated_tenant_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Tenant does not match authenticated user")
+    return authenticated_tenant_id
 
 
 def _encode_jwt(payload: dict[str, Any]) -> str:

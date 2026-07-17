@@ -5,6 +5,8 @@ End-to-end retrieval pipeline: query → context.
 from app.services.rag.retrieval.hybrid import hybrid_retrieve
 from app.services.rag.context.builder import build_context
 from app.services.rag.context.compressor import compress_context
+from app.config.database import SessionLocal
+from app.repositories.chunk import ChunkRepository
 from app.config.settings import get_settings
 from loguru import logger
 
@@ -37,17 +39,19 @@ async def retrieve_context(
         if item.get("chunk_id")
     ]
 
-    context = build_context(chunk_ids)
-
-    compressed = compress_context(
-        context,
-        max_tokens=_settings.MAX_CONTEXT_TOKENS
-    )
+    db = SessionLocal()
+    try:
+        chunks_by_id = {str(chunk.id): chunk for chunk in ChunkRepository(db).get_by_ids(chunk_ids)}
+        ranked_chunks = [chunks_by_id[chunk_id] for chunk_id in chunk_ids if chunk_id in chunks_by_id]
+        compressed_chunks = compress_context(ranked_chunks, max_tokens=_settings.MAX_CONTEXT_TOKENS)
+        selected_ids = [str(chunk.id) for chunk in compressed_chunks]
+        context = build_context(selected_ids)
+    finally:
+        db.close()
 
     logger.info(
-        f"Retrieval pipeline: "
-        f"{len(chunk_ids)} chunks -> "
-        f"{len(compressed)} chars"
+        f"Retrieval pipeline: {len(chunk_ids)} chunks -> {len(selected_ids)} compressed chunks; "
+        f"context={context[:500]!r}"
     )
 
-    return compressed, chunk_ids
+    return context, selected_ids

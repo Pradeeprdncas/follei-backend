@@ -1,4 +1,4 @@
-import uuid
+﻿import uuid
 from datetime import datetime
 from sqlalchemy import Column, DateTime, ForeignKey, Integer, JSON, Numeric, String, Text, Uuid
 from sqlalchemy.dialects.postgresql import JSONB
@@ -91,6 +91,7 @@ class Message(Base):
     channel = Column(String, nullable=True)  # whatsapp, sms, email, chat, call, instagram, web
 
     metadata_ = Column("metadata", JSON, default=dict, nullable=False)
+    idempotency_key = Column(String(160), nullable=True, index=True)
     created_at = Column(DateTime, default=datetime.utcnow)
 
     tenant = relationship("Tenant", back_populates="messages")
@@ -318,6 +319,9 @@ class ConversationSummary(Base):
     conversation_id = Column(Uuid(as_uuid=True), ForeignKey("conversations.id", ondelete="CASCADE"), nullable=False, index=True)
     summary_type = Column(String, default="ai", nullable=False)
     summary = Column(Text, nullable=False)
+    source_message_count = Column(Integer, nullable=True)
+    status = Column(String, nullable=False, default="ready")
+    metadata_ = Column("metadata", JSON, default=dict, nullable=False)
     created_by = Column(Uuid(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
@@ -442,3 +446,6 @@ class CallSession(Base):
     tenant = relationship("Tenant")
     conversation = relationship("Conversation", back_populates="call_sessions")
     interaction = relationship("Interaction", back_populates="call_session")
+
+
+

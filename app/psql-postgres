@@ -1,0 +1,27 @@
+import os
+
+from sqlalchemy import create_engine
+from sqlalchemy.orm import declarative_base, sessionmaker
+
+DATABASE_URL = os.getenv(
+    "DATABASE_URL",
+    "postgresql://postgres:Vignesh%40123@127.0.0.1:55589/follei_db",
+)
+
+engine = create_engine(DATABASE_URL, future=True)
+SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False, future=True)
+Base = declarative_base()
+
+
+def get_db():
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+
+# \dt                    -- list tables
+# \l                     -- list databases
+# SELECT version();      -- check postgres version
+# \q                     -- exit
+

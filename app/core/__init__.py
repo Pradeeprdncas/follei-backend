@@ -1,0 +1,1 @@
+"""Core - Application bootstrap, lifecycle, and service management."""

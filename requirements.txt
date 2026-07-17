@@ -49,3 +49,17 @@ email-validator
 
 pytest-asyncio>=0.24.0
 pymongo>=4.9,<5
+
+# System 3-6 recovery: MCP connectors, CRM integrations, analysis pipeline, workers
+celery
+mcp
+twilio
+pillow
+cryptography
+joblib
+lxml
+psutil
+pymupdf
+torch
+transformers
+peft

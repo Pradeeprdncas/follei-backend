@@ -6,12 +6,11 @@ set "PYTHON=%ROOT%follei_backend\indic_tts_venv\Scripts\python.exe"
 set "PORT=8002"
 
 rem Local development service endpoints (override these in your environment if needed)
-set "DATABASE_URL=postgresql://admin:secret@localhost:55589/follei_db"
+set "DATABASE_URL=postgresql://username:password@localhost:55589/follei_main"
 set "REDIS_URL=redis://localhost:6379"
 set "QDRANT_URL=http://localhost:6333"
 set "KAFKA_BOOTSTRAP_SERVERS=localhost:9092"
-set "FERRETDB_URL=mongodb://localhost:27017/ferret_context"
-set "FERRETDB_DATABASE=ferret_context"
+rem FerretDB settings and credentials are loaded from .env; do not override them here.
 
 cd /d "%ROOT%"
 echo.
@@ -51,11 +50,32 @@ call :check_port "PostgreSQL" 55589
 call :check_port "Redis" 6379
 call :check_port "Kafka" 9092
 
+echo [INFO] Ensuring the local base database schema exists...
+"%PYTHON%" -m app.database.bootstrap
+if errorlevel 1 (
+  echo [ERROR] Base database schema initialization failed. Follei was not started.
+  pause
+  exit /b 1
+)
+
+echo [INFO] Applying non-destructive database migrations...
+"%PYTHON%" -m alembic upgrade head
+if errorlevel 1 (
+  echo [ERROR] Database migration failed. Follei was not started.
+  pause
+  exit /b 1
+)
+
 for /f "tokens=5" %%P in ('netstat -ano ^| findstr /R /C:":%PORT% .*LISTENING"') do (
   echo [WARN] Port %PORT% is already in use by PID %%P. The API may already be running.
   goto :after_port_check
 )
 :after_port_check
+
+echo [INFO] Starting Follei indexing worker...
+start "Follei Indexing Worker" /D "%ROOT%" "%PYTHON%" -m app.workers.indexing_consumer
+echo [INFO] Starting Follei knowledge sync worker...
+start "Follei Knowledge Sync Worker" /D "%ROOT%" "%PYTHON%" -m app.workers.knowledge_sync_consumer
 
 echo [INFO] Starting Follei API on port %PORT%...
 start "Follei API" /D "%ROOT%" "%PYTHON%" -m uvicorn app.main:app --reload

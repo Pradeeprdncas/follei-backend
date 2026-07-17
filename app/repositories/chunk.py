@@ -31,7 +31,7 @@ class ChunkRepository:
 
     def get_texts_for_bm25(self, tenant_id: str) -> list[tuple[str, str]]:
         """Return (chunk_id, text) for BM25 indexing."""
-        rows = self.db.query(Chunk.id, Chunk.text).filter(Chunk.tenant_id == tenant_id).all()
+        rows = self.db.query(Chunk.id, Chunk.content).filter(Chunk.tenant_id == tenant_id).all()
         return [(r[0], r[1]) for r in rows]
 
     def get_by_embedding_hash(self, embedding_hash: str) -> Chunk | None:

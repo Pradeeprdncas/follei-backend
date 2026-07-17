@@ -1,7 +1,8 @@
-"""Chat endpoint — RAG question answering."""
+﻿"""Chat endpoint â€” RAG question answering."""
 from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel, Field
 from app.services.rag.pipelines.chat import chat_pipeline
+from app.services.knowledge.conversation_memory import ConversationScopeError
 from loguru import logger
 
 router = APIRouter(prefix="/chat", tags=["chat"])
@@ -19,6 +20,7 @@ class ChatResponse(BaseModel):
     confidence: float = Field(..., description="Evaluation matching metric scale from 0.0 to 1.0.")
     supported: bool = Field(..., description="True if truth claims perfectly match the database context chunks.")
     reason: str = Field(..., description="System diagnostic overview details from the verification engine.")
+    conversation_id: str | None = Field(None, description="Canonical persisted conversation UUID for the next turn.")
 
 
 @router.post(
@@ -47,9 +49,12 @@ async def chat(request: ChatRequest):
         )
         return ChatResponse(**result)
         
+    except ConversationScopeError:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Conversation does not belong to tenant")
     except Exception as e:
         logger.error(f"Fatal error sequence encountered inside Chat Pipeline Interface: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, 
             detail=f"Internal system RAG workflow pipeline exception error: {str(e)}"
         )
+

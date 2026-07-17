@@ -1,10 +1,11 @@
-"""Upload endpoint — accepts file, saves to disk, sends to Kafka for indexing."""
+﻿"""Upload endpoint: persist a source and queue canonical indexing metadata."""
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException
 from pathlib import Path
 import shutil
 import uuid
 from app.config.settings import get_settings
 from app.config.kafka import get_producer, ensure_topics
+from app.services.rag.document_identity import stable_upload_uri
 from loguru import logger
 
 router = APIRouter(prefix="/upload", tags=["upload"])
@@ -17,48 +18,39 @@ UPLOAD_DIR.mkdir(exist_ok=True)
 async def upload_file(
     file: UploadFile = File(...),
     tenant_id: str = Form(...),
+    source_uri: str | None = Form(None),
+    uploaded_by: str | None = Form(None),
 ):
-    """
-    Upload a document file.
-    Saves to disk and queues for indexing via Kafka.
-    """
+    """Save a source and queue its idempotent versioned indexing job."""
     if not file.filename:
         raise HTTPException(status_code=400, detail="No file provided")
-
-    # Save file
-    doc_id = str(uuid.uuid4())
+    job_id = str(uuid.uuid4())
     ext = Path(file.filename).suffix
-    save_path = UPLOAD_DIR / f"{doc_id}{ext}"
-
+    save_path = UPLOAD_DIR / f"{job_id}{ext}"
     try:
         with open(save_path, "wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
-    except Exception as e:
-        logger.error(f"File save failed: {e}")
+    except Exception as exc:
+        logger.error(f"File save failed: {exc}")
         raise HTTPException(status_code=500, detail="Failed to save file")
 
-    # Send to Kafka for async indexing
+    canonical_uri = source_uri or stable_upload_uri(tenant_id, file.filename)
+    message = {
+        "job_id": job_id,
+        "tenant_id": tenant_id,
+        "file_path": str(save_path),
+        "filename": file.filename,
+        "source_uri": canonical_uri,
+        "uploaded_by": uploaded_by,
+        "file_type": ext.lstrip(".").lower(),
+    }
     try:
         ensure_topics()
         producer = get_producer()
-        message = {
-            "document_id": doc_id,
-            "tenant_id": tenant_id,
-            "file_path": str(save_path),
-            "filename": file.filename,
-            "file_type": ext.lstrip(".").lower(),
-        }
-        producer.send(_settings.KAFKA_TOPIC_INDEXING, key=doc_id, value=message)
+        producer.send(_settings.KAFKA_TOPIC_INDEXING, key=job_id, value=message)
         producer.flush()
-        logger.info(f"Queued document {doc_id} for indexing")
-    except Exception as e:
-        logger.error(f"Kafka enqueue failed: {e}")
-        # Don't fail the upload if Kafka is down — we can re-index manually
+        logger.info(f"Queued indexing job {job_id} source={canonical_uri}")
+    except Exception as exc:
+        logger.error(f"Kafka enqueue failed: {exc}")
 
-    return {
-        "document_id": doc_id,
-        "tenant_id": tenant_id,
-        "filename": file.filename,
-        "status": "queued",
-        "message": "File uploaded and queued for indexing",
-    }
+    return {"document_id": job_id, "tenant_id": tenant_id, "filename": file.filename, "source_uri": canonical_uri, "status": "queued", "message": "File uploaded and queued for idempotent indexing"}

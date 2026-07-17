@@ -1,4 +1,4 @@
-import uuid
+﻿import uuid
 from datetime import datetime
 from sqlalchemy import BigInteger, Boolean, Column, DateTime, ForeignKey, Index, Integer, JSON, Numeric, String, Text, Uuid
 from sqlalchemy.dialects.postgresql import ARRAY
@@ -41,6 +41,12 @@ class Document(Base):
     path = Column(Text, nullable=True)
     file_size = Column(BigInteger, nullable=True)
     content_hash = Column(String(64), nullable=True, index=True)  # SHA256 for idempotency
+    # Canonical cross-source lifecycle fields. Added additively by Alembic.
+    category = Column(String(40), nullable=True, index=True)
+    version = Column(Integer, nullable=False, default=1)
+    previous_document_id = Column(Uuid(as_uuid=True), ForeignKey("documents.id", ondelete="SET NULL"), nullable=True, index=True)
+    sensitivity = Column(String(32), nullable=False, default="internal")
+    uploaded_by = Column(String(120), nullable=True)
     status = Column(String, default="pending")   # pending, processing, ready, failed
     
     __table_args__ = (
@@ -61,6 +67,7 @@ class Document(Base):
     pages = relationship("DocumentPage", back_populates="document", cascade="all, delete-orphan")
     versions = relationship("DocumentVersion", back_populates="document", cascade="all, delete-orphan")
     conversation_citations = relationship("ConversationCitation", back_populates="document")
+    previous_document = relationship("Document", remote_side=[id], foreign_keys=[previous_document_id], backref="next_versions")
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
@@ -101,7 +108,7 @@ class Document(Base):
     def total_pages(self, value):
         if self.metadata_ is None:
             self.metadata_ = {}
-        self.metadata_["total_pages"] = value
+        self.metadata_ = {**self.metadata_, "total_pages": value}
 
     @property
     def total_chunks(self):
@@ -113,7 +120,7 @@ class Document(Base):
     def total_chunks(self, value):
         if self.metadata_ is None:
             self.metadata_ = {}
-        self.metadata_["total_chunks"] = value
+        self.metadata_ = {**self.metadata_, "total_chunks": value}
 
 
 class DocumentChunk(Base):
@@ -240,6 +247,22 @@ class DocumentChunk(Base):
         self.metadata_["word_count"] = value
 
     @property
+    def section(self):
+        return self.heading
+
+    @section.setter
+    def section(self, value):
+        self.heading = value
+
+    @property
+    def permissions(self):
+        return (self.metadata_ or {}).get("permissions", [])
+
+    @permissions.setter
+    def permissions(self, value):
+        self.metadata_ = {**(self.metadata_ or {}), "permissions": value}
+
+    @property
     def tags(self):
         if not self.metadata_:
             return []
@@ -357,3 +380,7 @@ class KnowledgeTag(Base):
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
     tenant = relationship("Tenant")
+
+
+
+

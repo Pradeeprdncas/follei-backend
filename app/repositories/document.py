@@ -1,4 +1,4 @@
-"""Document repository — CRUD + queries."""
+﻿"""Document repository for the canonical UUID document model."""
 from sqlalchemy.orm import Session
 from app.models.document import Document
 
@@ -20,14 +20,18 @@ class DocumentRepository:
         return self.db.query(Document).filter(Document.tenant_id == tenant_id).all()
 
     def update_status(self, doc_id: str, status: str) -> None:
-        self.db.query(Document).filter(Document.id == doc_id).update({"status": status})
-        self.db.commit()
+        doc = self.get_by_id(doc_id)
+        if doc:
+            doc.status = status
+            self.db.commit()
 
-    def update_summary(self, doc_id: str, summary: str, keywords: str, total_chunks: int) -> None:
-        self.db.query(Document).filter(Document.id == doc_id).update({
-            "summary": summary,
-            "keywords": keywords,
-            "total_chunks": total_chunks,
-            "status": "indexed",
-        })
+    def update_summary(self, doc_id: str, summary: str, keywords: str | list[str], total_chunks: int) -> None:
+        """Persist canonical fields and compatibility metadata in one transaction."""
+        doc = self.get_by_id(doc_id)
+        if not doc:
+            return
+        doc.summary = summary
+        doc.keywords = keywords if isinstance(keywords, list) else [item.strip() for item in keywords.split(",") if item.strip()]
+        doc.total_chunks = total_chunks
+        doc.status = "indexed"
         self.db.commit()

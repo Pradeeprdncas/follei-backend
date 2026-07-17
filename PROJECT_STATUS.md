@@ -1,4 +1,4 @@
-﻿# Follei Backend — Project Status
+# Follei Backend — Project Status
 
 ## Current state
 

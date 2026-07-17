@@ -1,182 +1,86 @@
-"""End-to-end indexing pipeline: file Ã¢â€ â€™ chunks Ã¢â€ â€™ embeddings Ã¢â€ â€™ Qdrant + PostgreSQL."""
+﻿"""End-to-end versioned indexing: parse -> classify -> chunk -> embed -> stores."""
 from pathlib import Path
-import uuid
 from sqlalchemy.orm import Session
-from app.config.settings import get_settings
 from app.config.database import SessionLocal
-from app.models.document import Document
 from app.models.chunk import Chunk
 from app.repositories.document import DocumentRepository
 from app.repositories.chunk import ChunkRepository
 from app.services.rag.parsing.parser import parse_file
 from app.services.rag.chunking.registry import chunk_document
-from app.services.rag.metadata.extractor import extract_chunk_metadata, extract_document_metadata
+from app.services.rag.classification import classify_document
+from app.services.rag.document_identity import reserve_document
 from app.services.rag.metadata.summarizer import summarize_text
 from app.services.rag.metadata.keywords import extract_keywords
 from app.services.rag.embeddings.mistral import embed_texts
-from app.services.rag.embeddings.duplicate import is_duplicate, mark_embedded
+from app.services.rag.embeddings.duplicate import mark_embedded
 from app.services.rag.vectorstore.qdrant import ensure_collection
 from app.services.rag.vectorstore.insert import insert_chunks
+from app.services.knowledge.fact_extraction import extract_document_facts
 from loguru import logger
 
-_settings = get_settings()
 
-
-async def index_document(file_path: str, tenant_id: str, db: Session | None = None) -> str:
-    """
-    Full indexing pipeline for a single document.
-    Returns document_id.
-    """
+async def index_document(file_path: str, tenant_id: str, *, source_uri: str | None = None, original_filename: str | None = None, uploaded_by: str | None = None, db: Session | None = None) -> str:
+    """Index one source idempotently; identical content is never re-embedded."""
     path = Path(file_path)
-    close_db = False
-    if db is None:
-        db = SessionLocal()
-        close_db = True
-
+    close_db = db is None
+    db = db or SessionLocal()
+    doc_repo = DocumentRepository(db)
     try:
-        # 1. Create document record
-        doc_repo = DocumentRepository(db)
-        doc = Document(
-            tenant_id=tenant_id,
-            filename=path.name,
-            file_path=str(path),
-            file_type=path.suffix.lower().lstrip("."),
-            status="processing",
-        )
-        doc = doc_repo.create(doc)
-        logger.info(f"Indexing document {doc.id}: {path.name}")
+        filename = original_filename or path.name
+        source_type = path.suffix.lower().lstrip(".")
+        source_uri = source_uri or f"file://{path.resolve()}"
+        doc, duplicate = reserve_document(db=db, tenant_id=tenant_id, file_path=path, source_uri=source_uri, filename=filename, source_type=source_type, uploaded_by=uploaded_by)
+        if duplicate:
+            logger.info(f"Skipping duplicate document {doc.id}; hash already indexed")
+            return str(doc.id)
 
-        # 2. Parse file
-        pages = parse_file(file_path)
+        pages = parse_file(path)
+        category = await classify_document(filename=filename, pages=pages, source_type=source_type)
+        doc.category = category
         doc.total_pages = len(pages)
-
-        # 3. Chunk
-        chunks_data = chunk_document(file_path, pages, metadata={"source_type": path.suffix.lower().lstrip(".")})
-        logger.info(f"Created {len(chunks_data)} chunks")
-
-        # 4. Extract metadata
-        doc_meta = extract_document_metadata(pages)
-        all_text = " ".join([c["text"] for c in chunks_data])
+        db.commit()
+        chunks_data = chunk_document(path, pages, metadata={"source_type": source_type, "category": category, "sensitivity": doc.sensitivity})
+        all_text = " ".join(chunk["text"] for chunk in chunks_data)
         keywords = extract_keywords(all_text, top_n=10)
-        doc.keywords = ", ".join(keywords)
-
-        # 5. Summarize (async)
         summary = await summarize_text(all_text[:10000])
-        doc.summary = summary
 
-        # 6. Embed chunks (skip duplicates)
-        chunk_repo = ChunkRepository(db)
-        chunk_records = []
-        embeddings = []
-        payloads = []
-        chunk_ids = []
+        chunk_records: list[Chunk] = []
+        for index, chunk_data in enumerate(chunks_data):
+            chunk_records.append(Chunk(
+                id=chunk_data["chunk_id"], document_id=doc.id, tenant_id=tenant_id, chunk_index=index,
+                text=chunk_data["text"], page=chunk_data.get("page", 0), heading=chunk_data.get("heading"),
+                parent_chunk_id=chunk_data.get("parent_chunk_id"), prev_chunk_id=chunk_data.get("prev_chunk_id"),
+                next_chunk_id=chunk_data.get("next_chunk_id"), chunk_type=chunk_data.get("chunk_type"),
+                section_path=chunk_data.get("section_path"), word_count=chunk_data.get("word_count"),
+                tags=keywords[:5] + [f"category:{category}", "approval:draft"], permissions=[],
+            ))
 
-        for i, chunk_data in enumerate(chunks_data):
-            text = chunk_data["text"]
-            # Check duplicate
-            dup_hash = is_duplicate(text)
-            if dup_hash:
-                continue
-
-            # Create chunk record
-            chunk = Chunk(
-                id=chunk_data["chunk_id"],
-
-                document_id=doc.id,
-
-                tenant_id=tenant_id,
-
-                chunk_index=i,
-
-                text=text,
-
-                page=chunk_data["page"],
-
-                section=chunk_data.get("heading"),
-
-                heading=chunk_data.get("heading"),
-
-                parent_chunk_id=chunk_data.get("parent_chunk_id"),
-
-                prev_chunk_id=chunk_data.get("prev_chunk_id"),
-
-                next_chunk_id=chunk_data.get("next_chunk_id"),
-
-                chunk_type=chunk_data.get("chunk_type"),
-
-                section_path=chunk_data.get("section_path"),
-
-                word_count=chunk_data.get("word_count"),
-
-                tags=keywords[:5] + [f"category:{chunk_data.get('chunk_type')}", f"approval:{chunk_data.get('approval_status', 'draft')}"],
-
-                permissions=[]
-            )
-            chunk_records.append(chunk)
-            chunk_ids.append(chunk.id)
-
-        # Bulk insert chunks to DB
         if chunk_records:
-            chunk_repo.create_many(chunk_records)
-            logger.info(f"Saved {len(chunk_records)} chunks to PostgreSQL")
-
-            # Embed all chunk texts
-            texts_to_embed = [c.text for c in chunk_records]
-            embeddings = await embed_texts(texts_to_embed)
-
-            # Mark as embedded in Redis
-            for c in chunk_records:
-                h = mark_embedded(c.text, c.id)
-                c.embedding_hash = h
-
-            # Build payloads for Qdrant
-            for c in chunk_records:
+            ChunkRepository(db).create_many(chunk_records)
+            embeddings = await embed_texts([chunk.text for chunk in chunk_records])
+            payloads = []
+            for chunk in chunk_records:
+                chunk.embedding_hash = mark_embedded(chunk.text, str(chunk.id))
                 payloads.append({
-
-                    "text": c.text,
-
-                    "chunk_id": c.id,
-
-                    "document_id": c.document_id,
-
-                    "tenant_id": c.tenant_id,
-
-                    "page": c.page,
-
-                    "heading": c.heading,
-
-                    "chunk_type": c.chunk_type,
-
-                    "parent_chunk_id": c.parent_chunk_id,
-
-                    "prev_chunk_id": c.prev_chunk_id,
-
-                    "next_chunk_id": c.next_chunk_id,
-
-                    "section_path": c.section_path,
-
-                    "word_count": c.word_count,
-
-                    "tags": c.tags,
-                    "heading_path": c.section_path or [],
-                    "approval_status": "approved" if False else "draft",
-                    "sensitivity": "internal",
-                    "source_type": path.suffix.lower().lstrip(".")
+                    "text": chunk.text, "chunk_id": str(chunk.id), "document_id": str(chunk.document_id),
+                    "tenant_id": str(chunk.tenant_id), "page": chunk.page, "heading": chunk.heading,
+                    "chunk_type": chunk.chunk_type, "parent_chunk_id": chunk.parent_chunk_id,
+                    "prev_chunk_id": chunk.prev_chunk_id, "next_chunk_id": chunk.next_chunk_id,
+                    "section_path": chunk.section_path, "heading_path": chunk.section_path or [],
+                    "word_count": chunk.word_count, "tags": chunk.tags, "category": category,
+                    "approval_status": "draft", "sensitivity": doc.sensitivity, "source_type": source_type,
                 })
-
-                            # 7. Insert into Qdrant
             ensure_collection()
-            insert_chunks(chunk_ids, embeddings, payloads)
+            insert_chunks([str(chunk.id) for chunk in chunk_records], embeddings, payloads)
+            db.commit()
 
-        # Update document status
-        doc_repo.update_summary(doc.id, summary, ", ".join(keywords), len(chunk_records))
-        logger.info(f"Document {doc.id} indexed successfully: {len(chunk_records)} chunks")
-        return doc.id
-
-    except Exception as e:
-        logger.error(f"Indexing failed for {file_path}: {e}")
-        if 'doc' in locals():
-            doc_repo.update_status(doc.id, "failed")
+        doc_repo.update_summary(str(doc.id), summary, keywords, len(chunk_records))
+        await extract_document_facts(db, document=doc, chunks=chunk_records)
+        logger.info(f"Indexed document={doc.id} version={doc.version} category={category} chunks={len(chunk_records)}")
+        return str(doc.id)
+    except Exception:
+        if "doc" in locals():
+            doc_repo.update_status(str(doc.id), "failed")
         raise
     finally:
         if close_db:
