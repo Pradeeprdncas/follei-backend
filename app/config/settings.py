@@ -56,6 +56,9 @@ class Settings(BaseSettings):
     RAG_QUERY_CACHE_TTL_SECONDS: int = 300
     RAG_ENABLE_DOCUMENT_CLASSIFICATION: bool = True
     CONVERSATION_SUMMARY_TURN_INTERVAL: int = 6
+    # Empty by default (dev). Set to require the X-Webhook-Secret header on
+    # POST /channels/email/inbound before it's exposed to a real provider.
+    EMAIL_INBOUND_WEBHOOK_SECRET: str = Field(default="")
 
     # -- System 3-6 recovery: revenue intelligence / CRM integrations --
     BANT_MODEL_PATH: str = Field(default="AI_MODELS/bant")

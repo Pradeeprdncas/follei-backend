@@ -18,6 +18,29 @@ def _text(payload: dict[str, Any], name: str, default: str = "") -> str:
     return value if isinstance(value, str) else str(value)
 
 
+_FLAT_TIER_FIELDS = ("tier", "price", "currency", "billing_frequency", "billing_term")
+
+
+def _normalize_pricing_tiers(payload: dict[str, Any]) -> list[Any]:
+    """Return a tiers list from either extraction payload shape.
+
+    The deterministic fallback extractor emits {"tiers": [...]}, but the LLM
+    extractor (the path real documents go through) emits a flat single-tier
+    payload instead: {"tier": "Enterprise", "price": 999,
+    "billing_frequency": "monthly", "billing_term": "annually"} — no "tiers"
+    key at all. Reading only payload["tiers"] silently drops that data.
+    """
+    tiers = payload.get("tiers")
+    if isinstance(tiers, list) and tiers:
+        return tiers
+    flat = {key: payload[key] for key in _FLAT_TIER_FIELDS if payload.get(key) is not None}
+    if not flat:
+        return []
+    if "tier" in flat:
+        flat["name"] = flat.pop("tier")
+    return [flat]
+
+
 def publish_fact_draft(db: Session, draft: BusinessFactDraft) -> object:
     """Create the approved operational record. Caller owns the final commit."""
     if draft.approval_status != "draft":
@@ -31,8 +54,7 @@ def publish_fact_draft(db: Session, draft: BusinessFactDraft) -> object:
     elif draft.fact_type == "service":
         record = Service(tenant_id=tenant_id, name=_text(payload, "name", "Unnamed service"), description=payload.get("description"), metadata_=metadata)
     elif draft.fact_type == "pricing":
-        tiers = payload.get("tiers", [])
-        record = PricingModel(tenant_id=tenant_id, name=_text(payload, "name", "Documented pricing"), model_type=_text(payload, "model_type", "documented"), tiers=tiers if isinstance(tiers, list) else [], metadata_=metadata)
+        record = PricingModel(tenant_id=tenant_id, name=_text(payload, "name", "Documented pricing"), model_type=_text(payload, "model_type", "documented"), tiers=_normalize_pricing_tiers(payload), metadata_=metadata)
     elif draft.fact_type == "policy":
         record = Policy(tenant_id=tenant_id, title=_text(payload, "title", "Documented policy"), body=payload.get("body"), policy_type=payload.get("policy_type"), metadata_=metadata)
     elif draft.fact_type == "faq":
