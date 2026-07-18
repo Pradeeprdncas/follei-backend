@@ -19,8 +19,9 @@ from app.models.knowledge.fact_draft import BusinessFactDraft
 from app.models.knowledge.entity import Entity, EntityRelation
 from app.models.knowledge.sync_event import KnowledgeSyncEvent
 from app.models.domain import FAQ, Policy, Procedure, Product, Service, PricingModel, Competitor
+from app.models.onboarding_profile import OnboardingProfile
 
-__all__ = ["Tenant", "User", "Agent", "Conversation", "Message", "ConversationCitation", "Interaction", "Customer", "IntegrationConnection", "Lead", "Campaign", "KnowledgeBase", "Document", "Chunk", "BusinessFactDraft", "Entity", "EntityRelation", "KnowledgeSyncEvent"]
+__all__ = ["Tenant", "User", "Agent", "Conversation", "Message", "ConversationCitation", "Interaction", "Customer", "IntegrationConnection", "Lead", "Campaign", "KnowledgeBase", "Document", "Chunk", "BusinessFactDraft", "Entity", "EntityRelation", "KnowledgeSyncEvent", "OnboardingProfile"]
 
 
 

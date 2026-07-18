@@ -1,11 +1,13 @@
+import re
 from datetime import datetime, timedelta, timezone
 from typing import Any
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, Response, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from pydantic import BaseModel, ConfigDict, EmailStr, Field
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
 from sqlalchemy import text
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.security import create_access_token, decode_access_token, hash_password, verify_password
@@ -21,11 +23,31 @@ class FlexibleModel(BaseModel):
     model_config = ConfigDict(extra="allow")
 
 
-class RegisterRequest(FlexibleModel):
+class RegisterRequest(BaseModel):
+    """Account + tenant creation only. No onboarding-wizard fields belong here."""
+
+    model_config = ConfigDict(extra="forbid")
+
     email: EmailStr
-    password: str
-    tenant_name: str
-    full_name: str
+    password: str = Field(..., min_length=8, max_length=128)
+    full_name: str = Field(..., min_length=1, max_length=200)
+    tenant_name: str = Field(..., min_length=1, max_length=200)
+
+    @field_validator("password")
+    @classmethod
+    def _password_complexity(cls, value: str) -> str:
+        if not re.search(r"[A-Za-z]", value) or not re.search(r"[0-9]", value):
+            raise ValueError("Password must contain at least one letter and at least one number")
+        return value
+
+
+class RegisterResponse(BaseModel):
+    user_id: str
+    tenant_id: str
+    access_token: str
+    token_type: str
+    refresh_token: str
+    expires_in: int
 
 
 class LoginRequest(FlexibleModel):
@@ -294,8 +316,8 @@ def _roles_for_user(db: Session, user_id: UUID, fallback: str | None = None) -> 
     return roles or ([fallback] if fallback else [])
 
 
-@router.post("/auth/register", tags=["Domain 1 - Auth"], status_code=status.HTTP_201_CREATED)
-def register(payload: RegisterRequest, db: Session = Depends(get_db)) -> dict[str, Any]:
+@router.post("/auth/register", tags=["Domain 1 - Auth"], status_code=status.HTTP_201_CREATED, response_model=RegisterResponse)
+def register(payload: RegisterRequest, db: Session = Depends(get_db)) -> RegisterResponse:
     existing_user = db.execute(text("SELECT id FROM users WHERE email = :email"), {"email": payload.email}).first()
     if existing_user:
         raise HTTPException(status_code=409, detail="User email already exists")
@@ -305,15 +327,22 @@ def register(payload: RegisterRequest, db: Session = Depends(get_db)) -> dict[st
     first_name, last_name = _full_name_parts(payload.full_name)
     domain = payload.email.split("@", 1)[1] if "@" in payload.email else None
 
-    db.execute(
-        text(
-            """
-            INSERT INTO tenants (id, name, domain, slug, status, is_active, created_at, updated_at)
-            VALUES (:id, :name, :domain, :slug, 'active', true, :now, :now)
-            """
-        ),
-        {"id": tenant_id, "name": payload.tenant_name, "domain": domain, "slug": payload.tenant_name.lower().replace(" ", "-"), "now": _now()},
+    tenant_insert = text(
+        """
+        INSERT INTO tenants (id, name, domain, slug, status, is_active, timezone, auto_reply_enabled, created_at, updated_at)
+        VALUES (:id, :name, :domain, :slug, 'active', true, :timezone, false, :now, :now)
+        """
     )
+    tenant_params = {"id": tenant_id, "name": payload.tenant_name, "domain": domain, "slug": payload.tenant_name.lower().replace(" ", "-"), "timezone": "Asia/Kolkata", "now": _now()}
+    try:
+        db.execute(tenant_insert, tenant_params)
+    except IntegrityError:
+        # `domain` is derived from the signup email and only unique per-tenant by
+        # convention, not by business rule — two unrelated tenants can share a
+        # free/shared email provider domain (gmail.com, outlook.com, ...). Fall
+        # back to no domain rather than failing registration outright.
+        db.rollback()
+        db.execute(tenant_insert, {**tenant_params, "domain": None})
     db.execute(
         text(
             """
@@ -340,7 +369,7 @@ def register(payload: RegisterRequest, db: Session = Depends(get_db)) -> dict[st
     )
     db.commit()
     tokens = _token_pair(user_id, tenant_id)
-    return {"user_id": str(user_id), "tenant_id": str(tenant_id), "email": payload.email, **tokens}
+    return RegisterResponse(user_id=str(user_id), tenant_id=str(tenant_id), **tokens)
 
 
 @router.post("/auth/login", tags=["Domain 1 - Auth"])
@@ -433,8 +462,8 @@ def reset_password(payload: PasswordResetConfirmRequest) -> dict[str, str]:
 def create_tenant(payload: TenantCreateRequest, db: Session = Depends(get_db)) -> dict[str, Any]:
     tenant_id = uuid4()
     db.execute(
-        text("INSERT INTO tenants (id, name, slug, status, created_at, updated_at) VALUES (:id, :name, :slug, 'active', :now, :now)"),
-        {"id": tenant_id, "name": payload.name, "slug": payload.slug, "now": _now()},
+        text("INSERT INTO tenants (id, name, slug, status, is_active, timezone, auto_reply_enabled, created_at, updated_at) VALUES (:id, :name, :slug, 'active', true, :timezone, false, :now, :now)"),
+        {"id": tenant_id, "name": payload.name, "slug": payload.slug, "timezone": "Asia/Kolkata", "now": _now()},
     )
     db.execute(
         text("INSERT INTO tenant_settings (id, tenant_id, settings, created_at, updated_at) VALUES (:id, :tenant_id, :settings, :now, :now) ON CONFLICT (tenant_id) DO NOTHING"),

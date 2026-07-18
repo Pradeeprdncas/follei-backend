@@ -2,6 +2,7 @@
 from fastapi.middleware.cors import CORSMiddleware
 from app.routers import upload_router, chat_router, health_router, knowledge_review_router, orchestrator_router
 from app.routers.conversation_memory import router as conversation_memory_router
+from app.routers.onboarding import router as onboarding_router
 from app.services.rag.vectorstore.qdrant import ensure_collection
 from app.config.kafka import ensure_topics
 from loguru import logger
@@ -10,7 +11,7 @@ from loguru import logger
 def create_app() -> FastAPI:
     app = FastAPI(title="Follei Backend", description="Enterprise RAG and business workforce API", version="1.0.0")
     app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=False, allow_methods=["*"], allow_headers=["*"])
-    for router in (upload_router, chat_router, health_router, knowledge_review_router, orchestrator_router, conversation_memory_router):
+    for router in (upload_router, chat_router, health_router, knowledge_review_router, orchestrator_router, conversation_memory_router, onboarding_router):
         app.include_router(router)
 
     # Restored working domain API surface from backup-before-cleanup.
