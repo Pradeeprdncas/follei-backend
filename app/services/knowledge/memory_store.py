@@ -62,3 +62,30 @@ def upsert_summary_memory(*, tenant_id: str, subject_type: str, subject_id: str,
     document["history"] = history[-100:]
     collection.replace_one(key, document, upsert=True)
     return document
+
+
+def seed_onboarding_context(*, tenant_id: str, industry: str | None, goals: list[str], contact_channels: list[str]) -> dict[str, Any]:
+    """One-time seed of the tenant-level FerretDB context record from onboarding answers.
+
+    New: unlike upsert_summary_memory (which only ever writes lead/customer
+    subjects from conversation summaries), nothing previously wrote the
+    tenant-level subject at all. build_agent_context() already falls back to
+    subject_type="tenant"/subject_id=tenant_id when there's no lead_id or
+    customer_id, so seeding that same key here gives agents industry/goal/
+    channel context from day one instead of an empty customer_context until
+    the first conversation is summarized.
+    """
+    collection = get_context_database()["tenant_context"]
+    key = {"tenant_id": str(tenant_id), "subject_type": "tenant", "subject_id": str(tenant_id)}
+    existing = collection.find_one(key, {"_id": 0}) or {}
+    document = {
+        **existing,
+        **key,
+        "industry": industry,
+        "goals": goals,
+        "contact_channels": contact_channels,
+        "seeded_from": "onboarding",
+        "updated_at": _now(),
+    }
+    collection.replace_one(key, document, upsert=True)
+    return document

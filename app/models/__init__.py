@@ -20,8 +20,10 @@ from app.models.knowledge.entity import Entity, EntityRelation
 from app.models.knowledge.sync_event import KnowledgeSyncEvent
 from app.models.domain import FAQ, Policy, Procedure, Product, Service, PricingModel, Competitor
 from app.models.onboarding_profile import OnboardingProfile
+from app.models.onboarding_contact_channel import OnboardingContactChannel
+from app.models.onboarding_goal import OnboardingGoal
 
-__all__ = ["Tenant", "User", "Agent", "Conversation", "Message", "ConversationCitation", "Interaction", "Customer", "IntegrationConnection", "Lead", "Campaign", "KnowledgeBase", "Document", "Chunk", "BusinessFactDraft", "Entity", "EntityRelation", "KnowledgeSyncEvent", "OnboardingProfile"]
+__all__ = ["Tenant", "User", "Agent", "Conversation", "Message", "ConversationCitation", "Interaction", "Customer", "IntegrationConnection", "Lead", "Campaign", "KnowledgeBase", "Document", "Chunk", "BusinessFactDraft", "Entity", "EntityRelation", "KnowledgeSyncEvent", "OnboardingProfile", "OnboardingContactChannel", "OnboardingGoal"]
 
 
 

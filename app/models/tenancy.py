@@ -91,6 +91,11 @@ class User(Base):
     is_active = Column(Boolean, default=True)
     status = Column(String, default="active", nullable=False)
     last_login_at = Column(DateTime, nullable=True)
+    mobile_number = Column(String(32), nullable=True)
+    # Onboarding wizard's "Role" field (e.g. "Sales Manager", "Founder") — distinct
+    # from `role` above, which is the RBAC role ("admin") assigned at registration.
+    job_title = Column(String(120), nullable=True)
+    onboarding_terms_accepted_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 

@@ -91,6 +91,19 @@ def get_authenticated_tenant_id(
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
 
 
+def get_authenticated_user_id(
+    credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
+) -> str:
+    """Return the user (`sub`) claim from a valid bearer token."""
+    if credentials is None:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing bearer token")
+    try:
+        payload = decode_access_token(credentials.credentials)
+        return str(UUID(str(payload["sub"])))
+    except (KeyError, TypeError, ValueError):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
+
+
 def require_matching_tenant(requested_tenant_id: str | UUID, authenticated_tenant_id: str) -> str:
     """Reject a caller-supplied tenant identifier that differs from the JWT claim."""
     try:

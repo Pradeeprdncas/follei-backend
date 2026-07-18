@@ -99,7 +99,7 @@ be traceable to retrieved text.
                         {"role": "system", "content": compiled_system_prompt},
                         {"role": "user", "content": prompt},
                     ],
-                    "max_tokens": 1024,
+                    "max_tokens": _settings.MAX_ANSWER_TOKENS,
                     "temperature": 0.1, # Drop temperature slightly for tighter compliance
                 },
             )

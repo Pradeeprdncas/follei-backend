@@ -47,6 +47,7 @@ class Settings(BaseSettings):
     RRF_K: int = 60
     MIN_CONFIDENCE: float = 0.5
     MAX_CONTEXT_TOKENS: int = 4000
+    MAX_ANSWER_TOKENS: int = 4096
     # Fast call-path defaults. Expensive LLM rewrite/expansion/verification are opt-in.
     RAG_ENABLE_QUERY_OPTIMIZATION: bool = False
     RAG_ENABLE_QUERY_EXPANSION: bool = False

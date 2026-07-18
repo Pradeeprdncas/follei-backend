@@ -14,6 +14,8 @@ _settings = get_settings()
 UPLOAD_DIR = Path("uploads")
 UPLOAD_DIR.mkdir(exist_ok=True)
 
+ALLOWED_UPLOAD_EXTENSIONS = {".pdf", ".docx", ".pptx", ".xlsx", ".csv", ".txt", ".eml"}
+
 
 @router.post("/")
 async def upload_file(
@@ -27,8 +29,10 @@ async def upload_file(
     require_matching_tenant(tenant_id, authenticated_tenant_id)
     if not file.filename:
         raise HTTPException(status_code=400, detail="No file provided")
+    ext = Path(file.filename).suffix.lower()
+    if ext not in ALLOWED_UPLOAD_EXTENSIONS:
+        raise HTTPException(status_code=400, detail=f"Unsupported file type '{ext or '(none)'}'. Allowed: {', '.join(sorted(ALLOWED_UPLOAD_EXTENSIONS))}")
     job_id = str(uuid.uuid4())
-    ext = Path(file.filename).suffix
     save_path = UPLOAD_DIR / f"{job_id}{ext}"
     try:
         with open(save_path, "wb") as buffer:
