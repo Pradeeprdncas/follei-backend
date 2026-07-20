@@ -129,6 +129,17 @@ def sync_approved_fact_to_graph(db: Session, *, draft: BusinessFactDraft) -> lis
         target_name = relationship.get("target")
         if not isinstance(target_name, str) or not target_name.strip():
             continue
+        source_name = relationship.get("source")
+        if isinstance(source_name, str) and source_name.strip():
+            source = ensure_entity(
+                db,
+                tenant_id=draft.tenant_id,
+                entity_type=str(relationship.get("source_type") or "business_concept"),
+                name=source_name.strip(),
+                metadata=provenance,
+            )
+        else:
+            source = primary
         target = ensure_entity(
             db,
             tenant_id=draft.tenant_id,
@@ -137,13 +148,26 @@ def sync_approved_fact_to_graph(db: Session, *, draft: BusinessFactDraft) -> lis
             metadata=provenance,
         )
         relation_type = str(relationship.get("relation") or "related_to").strip().lower().replace(" ", "_")
-        relations.append(ensure_relation(db, tenant_id=draft.tenant_id, source=primary, target=target, relation_type=relation_type, metadata=provenance))
+        relations.append(ensure_relation(db, tenant_id=draft.tenant_id, source=source, target=target, relation_type=relation_type, metadata=provenance))
     return relations
+
+
+def supersede_fact_in_graph(db: Session, *, draft: BusinessFactDraft, winner_fact_id: str) -> int:
+    """Mark graph relations derived from a losing fact as non-retrievable."""
+    changed = 0
+    relations = db.query(EntityRelation).filter(EntityRelation.tenant_id == draft.tenant_id).all()
+    for relation in relations:
+        metadata = dict(relation.metadata_ or {})
+        if str(metadata.get("fact_draft_id") or "") != str(draft.id):
+            continue
+        relation.metadata_ = {**metadata, "superseded_by": str(winner_fact_id)}
+        changed += 1
+    return changed
 
 
 def traverse_graph(db: Session, *, tenant_id: str, query: str, limit: int = 12) -> list[dict[str, Any]]:
     """Return at most one-hop, cited relations matching a tenant-local query."""
-    terms = [term for term in re.findall(r"[\w-]{3,}", query.lower()) if term not in {"what", "with", "that", "this", "about", "does", "have", "from"}][:5]
+    terms = [term for term in re.findall(r"[\w-]{3,}", query.lower()) if term not in {"what", "with", "that", "this", "about", "does", "have", "from", "according", "each", "contain", "contains", "into"}][:8]
     if not terms:
         return []
     try:
@@ -160,7 +184,7 @@ def traverse_graph(db: Session, *, tenant_id: str, query: str, limit: int = 12) 
         for relation in relations:
             entity_ids.update((relation.source_entity_id, relation.target_entity_id))
         entities = {entity.id: entity for entity in db.query(Entity).filter(Entity.tenant_id == tenant_id, Entity.id.in_(entity_ids)).all()}
-        return [
+        result = [
             {
                 "from": entities[relation.source_entity_id].name,
                 "from_entity_id": str(relation.source_entity_id),
@@ -171,7 +195,17 @@ def traverse_graph(db: Session, *, tenant_id: str, query: str, limit: int = 12) 
                 "confidence": float(relation.confidence) if relation.confidence is not None else None,
             }
             for relation in relations
-            if relation.source_entity_id in entities and relation.target_entity_id in entities
+            if relation.source_entity_id in entities
+            and relation.target_entity_id in entities
+            and not (relation.metadata_ or {}).get("superseded_by")
+        ]
+        required = 1 if len(set(terms)) <= 2 else 2
+        return [
+            item for item in result
+            if sum(
+                1 for term in set(terms)
+                if term in f"{item['from']} {item['relation']} {item['to']}".lower()
+            ) >= required
         ]
     except Exception:
         # A graph is an enrichment layer; it must never block a tenant response.

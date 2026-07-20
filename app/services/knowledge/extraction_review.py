@@ -1,18 +1,17 @@
-"""Read/grouping layer over the existing business_fact_drafts table for the
-onboarding extraction-review tabs. Does not rebuild fact extraction.
-"""
+"""Group extracted business facts into the onboarding review tabs."""
 from sqlalchemy.orm import Session
 
 from app.models.knowledge.fact_draft import BusinessFactDraft
 
-# "Plans" has no dedicated extraction fact_type yet (see FACT_TYPES in
-# app/services/knowledge/fact_extraction.py) — it always renders as an empty
-# category today. Included anyway so the UI's fixed set of tabs stays stable.
+# Every review tab is backed by an extraction schema and operational publisher,
+# including Plans and Customer Segments.
 FACT_TYPE_TO_CATEGORY = {
     "product": "Products",
     "service": "Services",
     "pricing": "Pricing",
+    "plan": "Plans",
     "policy": "Policies",
+    "sla": "SLAs",
     "faq": "FAQs",
     "competitor": "Competitors",
     "customer_segment": "Customer Segments",
@@ -20,7 +19,7 @@ FACT_TYPE_TO_CATEGORY = {
     "support_process": "Support Processes",
     "payment_process": "Payment Processes",
 }
-ALL_CATEGORIES = (*dict.fromkeys(FACT_TYPE_TO_CATEGORY.values()), "Plans")
+ALL_CATEGORIES = tuple(dict.fromkeys(FACT_TYPE_TO_CATEGORY.values()))
 
 
 def _draft_to_item(draft: BusinessFactDraft) -> dict:

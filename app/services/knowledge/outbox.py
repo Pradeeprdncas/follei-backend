@@ -14,7 +14,7 @@ from app.config.database import SessionLocal
 from app.config.qdrant import get_qdrant
 from app.config.settings import get_settings
 from app.models.knowledge.sync_event import KnowledgeSyncEvent
-from app.services.knowledge.memory_store import upsert_summary_memory
+from app.services.knowledge.memory_store import upsert_document_memory, upsert_summary_memory
 from app.services.rag.embeddings.mistral import embed_texts
 from app.services.rag.vectorstore.insert import insert_chunks
 from app.services.rag.vectorstore.qdrant import ensure_collection
@@ -22,7 +22,9 @@ from app.services.rag.vectorstore.qdrant import ensure_collection
 _settings = get_settings()
 _TARGETS_BY_EVENT = {
     "conversation.summary.ready": ("ferret", "qdrant"),
+    "document.indexed": ("ferret",),
     "fact.approved": ("qdrant",),
+    "chunk.reviewed": ("qdrant",),
 }
 Handler = Callable[[KnowledgeSyncEvent], Any | Awaitable[Any]]
 
@@ -82,6 +84,24 @@ async def _ferret_summary(event: KnowledgeSyncEvent) -> str:
     return "completed"
 
 
+async def _ferret_document(event: KnowledgeSyncEvent) -> str:
+    payload = event.payload or {}
+    upsert_document_memory(
+        tenant_id=str(event.tenant_id),
+        document_id=str(event.aggregate_id),
+        title=str(payload["title"]),
+        source_type=str(payload["source_type"]),
+        category=payload.get("category"),
+        version=int(payload.get("version") or 1),
+        summary=str(payload.get("summary") or ""),
+        keywords=list(payload.get("keywords") or []),
+        chunk_count=int(payload.get("chunk_count") or 0),
+        source_uri=payload.get("source_uri"),
+        previous_document_id=payload.get("previous_document_id"),
+    )
+    return "completed"
+
+
 async def _qdrant_summary(event: KnowledgeSyncEvent) -> str:
     payload = event.payload or {}
     summary = str(payload.get("summary") or "").strip()
@@ -113,17 +133,28 @@ async def _qdrant_approved_fact(event: KnowledgeSyncEvent) -> str:
     chunk_id = (event.payload or {}).get("chunk_id")
     if not chunk_id:
         return "skipped"
+    payload = event.payload or {}
+    qdrant_payload = {
+        "approval_status": str(payload.get("approval_status") or "approved"),
+        "reviewer": payload.get("reviewer"),
+    }
+    if payload.get("tags") is not None:
+        qdrant_payload["tags"] = list(payload["tags"])
+    if event.event_type == "fact.approved":
+        qdrant_payload["approved_fact_id"] = str(event.aggregate_id)
+    if payload.get("reason"):
+        qdrant_payload["review_reason"] = payload["reason"]
     get_qdrant().set_payload(
         collection_name=_settings.QDRANT_COLLECTION_NAME,
         points=[str(chunk_id)],
-        payload={"approval_status": "approved", "approved_fact_id": str(event.aggregate_id)},
+        payload=qdrant_payload,
     )
     return "completed"
 
 
 def default_handlers() -> dict[str, Handler]:
     return {
-        "ferret": _ferret_summary,
+        "ferret": lambda event: _ferret_document(event) if event.event_type == "document.indexed" else _ferret_summary(event),
         "qdrant": lambda event: _qdrant_summary(event) if event.event_type == "conversation.summary.ready" else _qdrant_approved_fact(event),
     }
 

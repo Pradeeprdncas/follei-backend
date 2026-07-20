@@ -1,0 +1,6 @@
+Enterprise Support SLA
+
+Description: The Enterprise Support plan provides priority support for eligible customer requests.
+Response target: 2 hours.
+Resolution target: 24 hours for priority-one incidents when the required customer information is available.
+Coverage: 24 hours a day, 7 days a week, including weekends and public holidays.

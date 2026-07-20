@@ -1,0 +1,13 @@
+PRODUCT: Follei Knowledge System
+
+FEATURE: Grounded Worker Context
+BENEFIT: Accurate evidence-backed AI answers
+CUSTOMER SEGMENT: Growth-stage SaaS teams
+OBJECTION: Migration complexity
+RESPONSE: Use a phased onboarding plan with reviewed imports and source-level citations.
+
+Relationships:
+Grounded Worker Context DELIVERS BENEFIT Accurate evidence-backed AI answers.
+Accurate evidence-backed AI answers SERVES CUSTOMER SEGMENT Growth-stage SaaS teams.
+Growth-stage SaaS teams HAS OBJECTION Migration complexity.
+Migration complexity IS ANSWERED BY Use a phased onboarding plan with reviewed imports and source-level citations.

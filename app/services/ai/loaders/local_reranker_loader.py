@@ -89,9 +89,8 @@ class LocalRerankerLoader(BaseLocalLoader):
         Returns:
             List of (document, score) tuples, sorted by score descending
         """
-        await self.ensure_loaded()
-
         try:
+            await self.ensure_loaded()
             import torch
 
             # Prepare pairs: [query, doc1], [query, doc2], ...

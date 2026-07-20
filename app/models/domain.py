@@ -82,6 +82,22 @@ class Service(Base):
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 
 
+class SLA(Base):
+    """A tenant-owned support commitment extracted from approved knowledge."""
+    __tablename__ = "slas"
+
+    id = Column(Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id = Column(Uuid(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False, index=True)
+    name = Column(String, nullable=False)
+    description = Column(Text, nullable=True)
+    response_target_hours = Column(Integer, nullable=True)
+    resolution_target_hours = Column(Integer, nullable=True)
+    coverage = Column(Text, nullable=True)
+    metadata_ = Column("metadata", JSON, default=dict, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+
 class PricingModel(Base):
     __tablename__ = "pricing_models"
 
@@ -221,6 +237,31 @@ class Plan(Base):
     billing_interval = Column(String, default="month", nullable=False)
     feature_limits = Column(JSON, default=dict, nullable=False)
     is_active = Column(Boolean, default=True, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+
+class BusinessPlan(Base):
+    """Tenant-owned plan extracted from company knowledge, separate from Follei billing plans."""
+    __tablename__ = "business_plans"
+    id = Column(Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id = Column(Uuid(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False, index=True)
+    name = Column(String, nullable=False)
+    description = Column(Text, nullable=True)
+    pricing = Column(JSON, default=dict, nullable=False)
+    metadata_ = Column("metadata", JSON, default=dict, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+
+class CustomerSegment(Base):
+    __tablename__ = "customer_segments"
+    id = Column(Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id = Column(Uuid(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False, index=True)
+    name = Column(String, nullable=False)
+    description = Column(Text, nullable=True)
+    criteria = Column(JSON, default=dict, nullable=False)
+    metadata_ = Column("metadata", JSON, default=dict, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 

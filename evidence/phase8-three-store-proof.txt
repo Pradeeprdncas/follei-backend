@@ -1,0 +1,6 @@
+Follei three-store upload proof
+
+The Knowledge Recovery Runbook is a business knowledge article.
+It explains that PostgreSQL is the canonical structured store, Qdrant holds
+semantic chunk embeddings, and FerretDB holds clean long-term memory
+projections. Support staff should verify source citations before answering.

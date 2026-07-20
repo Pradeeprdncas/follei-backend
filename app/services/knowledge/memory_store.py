@@ -64,6 +64,49 @@ def upsert_summary_memory(*, tenant_id: str, subject_type: str, subject_id: str,
     return document
 
 
+def upsert_document_memory(
+    *,
+    tenant_id: str,
+    document_id: str,
+    title: str,
+    source_type: str,
+    category: str | None,
+    version: int,
+    summary: str,
+    keywords: list[str],
+    chunk_count: int,
+    source_uri: str | None = None,
+    previous_document_id: str | None = None,
+) -> dict[str, Any]:
+    """Write the clean long-term-memory projection for one indexed document.
+
+    PostgreSQL remains the canonical document/fact store and Qdrant owns chunk
+    embeddings.  FerretDB receives only a compact, queryable memory record so
+    an upload is represented in all three stores without copying raw blobs or
+    creating a second source of truth.
+    """
+    collection = get_context_database()["knowledge_document_memory"]
+    key = {"tenant_id": str(tenant_id), "document_id": str(document_id)}
+    document = {
+        **key,
+        "title": str(title),
+        "source_type": str(source_type),
+        "category": str(category) if category else None,
+        "version": int(version),
+        "summary": str(summary or "").strip(),
+        "keywords": [str(value).strip() for value in keywords if str(value).strip()],
+        "chunk_count": int(chunk_count),
+        "source_uri": str(source_uri) if source_uri else None,
+        "previous_document_id": str(previous_document_id) if previous_document_id else None,
+        "projection_type": "indexed_document_summary",
+        "canonical_store": "postgres",
+        "semantic_store": "qdrant",
+        "updated_at": _now(),
+    }
+    collection.replace_one(key, document, upsert=True)
+    return document
+
+
 def seed_onboarding_context(*, tenant_id: str, industry: str | None, goals: list[str], contact_channels: list[str]) -> dict[str, Any]:
     """One-time seed of the tenant-level FerretDB context record from onboarding answers.
 

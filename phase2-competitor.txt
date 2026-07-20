@@ -1,0 +1,5 @@
+Competitor Profile: AcmeSuite
+
+AcmeSuite is a competitor in the autonomous business workforce market.
+Website: https://acmesuite.example
+Summary: AcmeSuite offers workflow automation, but it does not provide Follei's tenant-scoped business knowledge graph or multi-worker orchestration.

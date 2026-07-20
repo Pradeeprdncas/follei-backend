@@ -7,6 +7,10 @@ from app.services.rag.loaders import (
     extract_docx_text,
     extract_ppt_text,
     extract_email_text,
+    extract_text_file,
+    extract_csv_text,
+    extract_xlsx_text,
+    extract_image_text,
 )
 from app.services.rag.parsing.cleaner import clean_text, remove_headers_footers
 
@@ -18,6 +22,14 @@ SUPPORTED_EXTENSIONS = {
     ".ppt": extract_ppt_text,
     ".eml": extract_email_text,
     ".msg": extract_email_text,
+    ".txt": extract_text_file,
+    ".csv": extract_csv_text,
+    ".xlsx": extract_xlsx_text,
+    ".png": extract_image_text,
+    ".jpg": extract_image_text,
+    ".jpeg": extract_image_text,
+    ".tif": extract_image_text,
+    ".tiff": extract_image_text,
 }
 
 

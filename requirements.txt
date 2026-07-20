@@ -23,6 +23,9 @@ python-dotenv
 pypdf
 python-docx
 python-pptx
+openpyxl
+extract-msg
+pytesseract
 
 tiktoken
 
@@ -38,6 +41,10 @@ langchain-text-splitters
 orjson
 
 aiofiles
+aiohttp
+beautifulsoup4
+playwright
+boto3
 
 tenacity
 

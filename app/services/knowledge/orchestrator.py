@@ -9,8 +9,9 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from app.services.rag.retrieval.dense import retrieve_dense
-from app.services.knowledge.context_store import get_context
+from app.services.knowledge.context_store import get_context, search_document_memory
 from app.services.knowledge.graph import traverse_graph
+from app.services.knowledge.contracts import AgentContextContract
 
 # Lower number is more authoritative. Agents receive this provenance rather than
 # silently treating semantically similar data as equally trustworthy.
@@ -90,22 +91,32 @@ def _conflicts(approved_facts: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 def _query_matches(query: str, *values: Any) -> bool:
-    terms = {term for term in re.findall(r"[\w-]{3,}", query.lower()) if term not in {"what", "does", "have", "with", "about", "tell", "please"}}
+    stopwords = {
+        "the", "what", "which", "when", "where", "who", "why", "how",
+        "does", "have", "with", "about", "tell", "please", "from", "for",
+        "this", "that", "these", "those", "your", "our", "are", "was",
+        "were", "can", "could", "would", "should", "many", "much",
+        "according", "each", "contain", "contains", "into",
+    }
+    terms = {term for term in re.findall(r"[\w-]{3,}", query.lower()) if term not in stopwords}
     if not terms:
         return True
     haystack = " ".join(str(value or "") for value in values).lower()
-    return any(term in haystack for term in terms)
+    matched = sum(1 for term in terms if term in haystack)
+    required = 1 if len(terms) <= 2 else 2
+    return matched >= required
 
 
 def _approved_operational_facts(db: Session, tenant_id: str, query: str) -> list[dict[str, Any]]:
     """Read only human-approved structured records from PostgreSQL."""
     try:
-        from app.models.domain import FAQ, Policy, PricingModel, Product, Service
+        from app.models.domain import FAQ, Policy, PricingModel, Product, Service, SLA
         models = (
             (PricingModel, "pricing", "name", "tiers"),
             (Policy, "policy", "title", "body"),
             (Product, "product", "name", "description"),
             (Service, "service", "name", "description"),
+            (SLA, "sla", "name", "description"),
             (FAQ, "faq", "question", "answer"),
         )
         facts: list[dict[str, Any]] = []
@@ -116,6 +127,8 @@ def _approved_operational_facts(db: Session, tenant_id: str, query: str) -> list
                 if not _query_matches(query, topic, value, fact_type):
                     continue
                 metadata = getattr(row, "metadata_", {}) or {}
+                if metadata.get("superseded_by") or any(str(tag).startswith("superseded_by:") for tag in (getattr(row, "tags", None) or [])):
+                    continue
                 citation = metadata.get("source_citation") or {"fact_draft_id": metadata.get("fact_draft_id")}
                 facts.append(_decorate({
                     "fact_id": str(row.id), "fact_type": fact_type, "topic": str(topic), "value": value,
@@ -146,7 +159,7 @@ def load_postgres_context(db: Session, tenant_id: str, lead_id: str | None, quer
 
 async def build_agent_context(*, db: Session, tenant_id: str, query: str, lead_id: str | None = None, customer_id: str | None = None, top_k: int = 5) -> dict:
     """Only bounded, tenant-scoped, provenance-aware context is exposed to agents."""
-    facts, relationships = load_postgres_context(db, str(tenant_id), lead_id)
+    facts, relationships = load_postgres_context(db, str(tenant_id), lead_id, query)
     graph_relationships = [_decorate(item, source="graph", updated_at=(item.get("citation") or {}).get("updated_at")) for item in traverse_graph(db, tenant_id=str(tenant_id), query=query)]
     relationships = _rank([*relationships, *graph_relationships])
     subject_type = "lead" if lead_id else "customer" if customer_id else "tenant"
@@ -155,16 +168,21 @@ async def build_agent_context(*, db: Session, tenant_id: str, query: str, lead_i
     evidence = _rank([_decorate(item, source="qdrant") for item in raw_evidence])[:10]
     memory = get_context(tenant_id=str(tenant_id), subject_type=subject_type, subject_id=str(subject_id)) or {}
     customer_context = _decorate(memory, source="ferret", updated_at=memory.get("updated_at")) if memory else {}
-    approved = _rank(list(facts.get("approved") or _approved_operational_facts(db, str(tenant_id), query)))
+    memory_evidence = [
+        _decorate(item, source="ferret", updated_at=item.get("updated_at"))
+        for item in search_document_memory(tenant_id=str(tenant_id), query=query, limit=3)
+    ]
+    approved = _rank(list(facts.get("approved") or []))
     facts["approved"] = approved
     conflicts = _conflicts(approved)
     citations = [{"chunk_id": item.get("chunk_id"), "document_id": item.get("document_id"), "page": item.get("page"), "heading_path": item.get("heading_path", []), "source_type": item.get("source_type"), "approval_status": item.get("approval_status"), "trust_rank": item.get("trust_rank"), "freshness_at": item.get("freshness_at")} for item in evidence]
-    return {
+    return AgentContextContract.model_validate({
         "facts": facts,
         "relationships": relationships,
         "evidence": evidence,
         "customer_context": customer_context,
+        "memory_evidence": memory_evidence,
         "citations": citations,
         "conflicts": conflicts,
         "trust_policy": {"postgres": 1, "graph": 2, "qdrant": 3, "ferret": 4},
-    }
+    }).model_dump()

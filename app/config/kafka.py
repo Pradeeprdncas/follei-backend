@@ -34,7 +34,7 @@ def ensure_topics():
         )
         existing = admin.list_topics()
         topics_to_create = []
-        for t in [_settings.KAFKA_TOPIC_INDEXING, _settings.KAFKA_TOPIC_CHAT]:
+        for t in [_settings.KAFKA_TOPIC_INDEXING, _settings.KAFKA_TOPIC_INDEXING_DLQ, _settings.KAFKA_TOPIC_CHAT]:
             if t not in existing:
                 topics_to_create.append(
                     NewTopic(name=t, num_partitions=3, replication_factor=1)
@@ -56,5 +56,5 @@ def get_consumer(topic: str, group_id: str | None = None) -> KafkaConsumer:
         group_id=gid,
         auto_offset_reset="earliest",
         value_deserializer=lambda m: json.loads(m.decode("utf-8")),
-        enable_auto_commit=True,
+        enable_auto_commit=False,
     )

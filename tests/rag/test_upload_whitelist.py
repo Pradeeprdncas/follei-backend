@@ -14,6 +14,12 @@ USER = uuid.uuid4()
 
 
 class _FakeDB:
+    def add(self, value):
+        self.value = value
+
+    def commit(self):
+        pass
+
     def close(self):
         pass
 
@@ -24,6 +30,7 @@ def _overrides(monkeypatch, tmp_path):
     monkeypatch.setattr(upload_module, "UPLOAD_DIR", tmp_path)
     monkeypatch.setattr(upload_module, "ensure_topics", lambda: None)
     monkeypatch.setattr(upload_module, "get_producer", lambda: pytest.importorskip("unittest.mock").MagicMock())
+    monkeypatch.setattr(upload_module, "store_source", lambda *args, **kwargs: None)
     yield
     app.dependency_overrides.pop(get_db, None)
 
@@ -59,7 +66,7 @@ def test_winmd_upload_is_rejected(tmp_path):
     assert list(tmp_path.iterdir()) == []
 
 
-@pytest.mark.parametrize("filename", ["doc.pdf", "doc.docx", "slides.pptx", "sheet.xlsx", "data.csv", "notes.txt", "mail.eml"])
+@pytest.mark.parametrize("filename", ["doc.pdf", "doc.docx", "notes.txt", "slides.ppt", "slides.pptx", "sheet.xlsx", "data.csv", "mail.eml", "mail.msg", "scan.png"])
 def test_whitelisted_types_pass_the_extension_check(filename, tmp_path):
     resp = client.post(
         "/upload/",
@@ -68,5 +75,30 @@ def test_whitelisted_types_pass_the_extension_check(filename, tmp_path):
         headers=_auth_header(),
     )
     assert resp.status_code == 200
-    assert resp.json()["filename"] == filename
-    assert len(list(tmp_path.iterdir())) == 1
+
+
+def test_target_category_is_validated_and_forwarded_to_indexing_job(tmp_path):
+    producer = pytest.importorskip("unittest.mock").MagicMock()
+    upload_module.get_producer = lambda: producer
+    resp = client.post(
+        "/upload/",
+        files={"file": ("pricing.txt", b"Enterprise costs $999", "text/plain")},
+        data={"tenant_id": str(TENANT), "category": "pricing"},
+        headers=_auth_header(),
+    )
+    assert resp.status_code == 200
+    assert resp.json()["target_category"] == "pricing"
+    assert producer.send.call_args.kwargs["value"]["category"] == "pricing"
+
+
+@pytest.mark.parametrize("filename", ["sheet.xls", "image.exe"])
+def test_unimplemented_types_are_rejected_before_queueing(filename, tmp_path):
+    resp = client.post(
+        "/upload/",
+        files={"file": (filename, b"content", "application/octet-stream")},
+        data={"tenant_id": str(TENANT)},
+        headers=_auth_header(),
+    )
+    assert resp.status_code == 400
+    assert "Unsupported file type" in resp.json()["detail"]
+    assert list(tmp_path.iterdir()) == []

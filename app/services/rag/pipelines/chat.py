@@ -1,4 +1,5 @@
 ﻿"""End-to-end chat pipeline: question -> answer + citations + confidence."""
+import json
 from uuid import uuid4
 from app.services.rag.llm.optimizer import optimize_user_request
 from app.services.rag.pipelines.retrieval import retrieve_context
@@ -11,10 +12,16 @@ from app.config.database import SessionLocal
 from app.services.knowledge.orchestrator import build_agent_context
 from app.services.knowledge.conversation_memory import ConversationScopeError, persist_chat_turn, summarize_conversation
 from loguru import logger
+from app.models.domain import RetrievalLog
 
 _settings = get_settings()
 
 _MAX_FACTS_IN_CONTEXT = 5
+
+
+def _json_safe(value):
+    """Convert UUIDs and other scalar identifiers into JSON-safe values."""
+    return json.loads(json.dumps(value, default=str))
 
 
 def _format_agent_context(agent_context: dict) -> str:
@@ -27,9 +34,21 @@ def _format_agent_context(agent_context: dict) -> str:
             for fact in approved[:_MAX_FACTS_IN_CONTEXT]
         ]
         sections.append("APPROVED BUSINESS FACTS (source: Postgres, human-approved):\n" + "\n".join(lines))
+    relationships = agent_context.get("relationships") or []
+    if relationships:
+        sections.append("KNOWLEDGE GRAPH RELATIONSHIPS (source: Postgres graph):\n" + "\n".join(
+            f"- {item.get('from')} {item.get('relation')} {item.get('to')}"
+            for item in relationships[:_MAX_FACTS_IN_CONTEXT]
+        ))
     customer_context = agent_context.get("customer_context") or {}
     if customer_context:
         sections.append(f"CUSTOMER CONTEXT (source: FerretDB memory): {customer_context}")
+    memory_evidence = agent_context.get("memory_evidence") or []
+    if memory_evidence:
+        sections.append("LONG-TERM DOCUMENT MEMORY (source: FerretDB clean projections):\n" + "\n".join(
+            f"- {item.get('title')}: {item.get('summary')}"
+            for item in memory_evidence[:3]
+        ))
     return "\n\n".join(sections)
 
 
@@ -46,6 +65,29 @@ def _fact_citations(agent_context: dict) -> list[dict]:
         }
         for fact in approved[:_MAX_FACTS_IN_CONTEXT]
     ]
+
+
+def _graph_citations(agent_context: dict) -> list[dict]:
+    return [{"source": "graph_relation", "from": item.get("from"), "relation": item.get("relation"), "to": item.get("to"), "citation": item.get("citation"), "trust_rank": item.get("trust_rank")} for item in (agent_context.get("relationships") or []) if item.get("source") == "graph"]
+
+
+def _memory_citations(agent_context: dict) -> list[dict]:
+    memory = agent_context.get("customer_context") or {}
+    citations = [{"source": "ferretdb_memory", "subject_type": memory.get("subject_type"), "subject_id": memory.get("subject_id"), "freshness_at": memory.get("freshness_at"), "trust_rank": memory.get("trust_rank")}] if memory else []
+    citations.extend({
+        "source": "ferretdb_document_memory",
+        "document_id": item.get("document_id"),
+        "document_name": item.get("title"),
+        "category": item.get("category"),
+        "projection_type": item.get("projection_type"),
+        "freshness_at": item.get("freshness_at"),
+        "trust_rank": item.get("trust_rank"),
+    } for item in (agent_context.get("memory_evidence") or []))
+    return citations
+
+
+def _chunk_citations(chunk_ids: list[str]) -> list[dict]:
+    return [{**citation, "source": citation.get("source") or "qdrant_chunk"} for citation in extract_citations(chunk_ids)]
 
 
 async def chat_pipeline(question: str, tenant_id: str, session_id: str | None = None) -> dict:
@@ -80,7 +122,7 @@ async def chat_pipeline(question: str, tenant_id: str, session_id: str | None = 
         trace.mark("orchestrator_context")
 
         agent_context_text = _format_agent_context(agent_context)
-        combined_context = "\n\n".join(part for part in (context, agent_context_text) if part)
+        combined_context = "\n\n".join(part for part in (agent_context_text, context) if part)
         conflicts = agent_context.get("conflicts") or []
 
         if not combined_context:
@@ -109,7 +151,7 @@ async def chat_pipeline(question: str, tenant_id: str, session_id: str | None = 
             if verification["confidence"] < _settings.MIN_CONFIDENCE or not verification["supported"]:
                 result = {"answer": "I don't have enough information to answer that question confidently.", "citations": [], "confidence": verification["confidence"], "supported": verification["supported"], "reason": verification["reason"], "conflicts": []}
             else:
-                citations = extract_citations(chunk_ids) + _fact_citations(agent_context)
+                citations = _chunk_citations(chunk_ids) + _fact_citations(agent_context) + _graph_citations(agent_context) + _memory_citations(agent_context)
                 trace.mark("citations")
                 result = {"answer": answer, "citations": citations, "confidence": verification["confidence"], "supported": verification["supported"], "reason": verification["reason"], "conflicts": []}
 
@@ -140,8 +182,26 @@ async def chat_pipeline(question: str, tenant_id: str, session_id: str | None = 
                 logger.warning(f"Structured conversation summary/outbox sync skipped: {exc}")
         finally:
             db.close()
+        log_db = SessionLocal()
+        try:
+            log_db.add(RetrievalLog(
+                tenant_id=tenant_id,
+                query=question,
+                results=_json_safe([{"citation": citation} for citation in result.get("citations", [])]),
+                scores=_json_safe([{
+                    "confidence": result.get("confidence"),
+                    "supported": result.get("supported"),
+                    "reason": result.get("reason"),
+                    "conflicts": len(result.get("conflicts") or []),
+                }]),
+                latency_ms=trace.elapsed_ms(),
+            ))
+            log_db.commit()
+        except Exception as exc:
+            log_db.rollback()
+            logger.warning(f"Retrieval observability persistence skipped: {exc}")
+        finally:
+            log_db.close()
         return result
     finally:
         trace.emit()
-
-

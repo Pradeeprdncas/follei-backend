@@ -21,3 +21,6 @@ class LatencyTrace:
         total = round((time.perf_counter() - self._started) * 1000, 1)
         stages = " ".join(f"{key}={value}ms" for key, value in self._stages.items())
         logger.info(f"rag_latency trace={self.trace_id} tenant={self.tenant_id} {stages} total={total}ms")
+
+    def elapsed_ms(self) -> int:
+        return int((time.perf_counter() - self._started) * 1000)

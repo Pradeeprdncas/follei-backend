@@ -4,6 +4,7 @@ from uuid import uuid4
 import pytest
 
 from app.services.knowledge.outbox import deliver_event
+from app.services.knowledge import outbox
 
 
 def _event():
@@ -79,3 +80,35 @@ async def test_failed_target_is_retryable_without_repeating_completed_target():
     second = await deliver_event(event, handlers={"ferret": ferret, "qdrant": qdrant_recovers})
     assert second.status == "completed"
     assert calls == {"ferret": 1, "qdrant": 2}
+
+
+@pytest.mark.asyncio
+async def test_document_indexed_routes_only_clean_projection_to_ferret(monkeypatch):
+    captured = {}
+
+    def write_projection(**values):
+        captured.update(values)
+
+    monkeypatch.setattr(outbox, "upsert_document_memory", write_projection)
+    event = SimpleNamespace(
+        id=uuid4(), tenant_id=uuid4(), aggregate_id=uuid4(),
+        event_type="document.indexed",
+        payload={
+            "title": "Support Handbook", "source_type": "pdf",
+            "category": "knowledge_article", "version": 2,
+            "summary": "Approved support guidance.", "keywords": ["support"],
+            "chunk_count": 3, "source_uri": "object://safe/source",
+            "previous_document_id": str(uuid4()),
+        },
+        deliveries={"postgres": "completed", "ferret": "pending"},
+        status="pending", attempt_count=0, last_error=None, completed_at=None,
+    )
+
+    completed = await deliver_event(event)
+
+    assert completed.status == "completed"
+    assert completed.deliveries == {"postgres": "completed", "ferret": "completed"}
+    assert captured["tenant_id"] == str(event.tenant_id)
+    assert captured["document_id"] == str(event.aggregate_id)
+    assert captured["summary"] == "Approved support guidance."
+    assert "text" not in captured and "raw_content" not in captured

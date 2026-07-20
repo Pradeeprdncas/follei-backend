@@ -15,8 +15,9 @@ async def test_orchestrator_ranks_sources_by_trust_and_freshness_and_flags_appro
     )
     captured = {}
 
-    def postgres_context(db, tenant_id, lead_id):
+    def postgres_context(db, tenant_id, lead_id, query):
         captured["tenant_id"] = tenant_id
+        captured["query"] = query
         return {"tenant_id": tenant_id, "approved": [old, fresh]}, []
 
     async def evidence(query, tenant_id, top_k):
@@ -27,16 +28,19 @@ async def test_orchestrator_ranks_sources_by_trust_and_freshness_and_flags_appro
     monkeypatch.setattr(orchestrator, "retrieve_dense", evidence)
     monkeypatch.setattr(orchestrator, "traverse_graph", lambda db, tenant_id, query: [{"from": "Enterprise", "relation": "defines", "to": "Plan"}])
     monkeypatch.setattr(orchestrator, "get_context", lambda **kwargs: {"updated_at": "2026-07-10T00:00:00+00:00", "competitors": [{"value": "Salesforce"}]})
+    monkeypatch.setattr(orchestrator, "search_document_memory", lambda **kwargs: [{"document_id": "doc-memory", "title": "Enterprise guide", "summary": "Enterprise price guidance", "updated_at": "2026-07-11T00:00:00+00:00"}])
 
     result = await orchestrator.build_agent_context(db=object(), tenant_id="tenant-a", query="What is the Enterprise price?", lead_id="lead-a")
 
-    assert captured == {"tenant_id": "tenant-a", "evidence_tenant": "tenant-a"}
+    assert captured == {"tenant_id": "tenant-a", "query": "What is the Enterprise price?", "evidence_tenant": "tenant-a"}
     assert result["trust_policy"] == {"postgres": 1, "graph": 2, "qdrant": 3, "ferret": 4}
     assert result["facts"]["approved"][0]["fact_id"] == "new-price"
     assert result["facts"]["approved"][0]["freshness_score"] > result["facts"]["approved"][1]["freshness_score"]
     assert result["relationships"][0]["source"] == "graph"
     assert result["evidence"][0]["trust_rank"] == 3
     assert result["customer_context"]["trust_rank"] == 4
+    assert result["memory_evidence"][0]["document_id"] == "doc-memory"
+    assert result["memory_evidence"][0]["trust_rank"] == 4
     assert len(result["conflicts"]) == 1
     assert result["conflicts"][0]["requires_review"] is True
     assert [candidate["fact_id"] for candidate in result["conflicts"][0]["candidates"]] == ["new-price", "old-price"]

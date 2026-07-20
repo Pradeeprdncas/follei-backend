@@ -1,0 +1,106 @@
+FOLLEI SYSTEM 1 / SYSTEM 2 HANDOVER
+Verified: 2026-07-20 (Asia/Kolkata)
+
+SCORING
+=======
+System 1 document + website onboarding slice: 94% proven, 6% pending.
+System 1 against the full product proposal (including every external connector): 70% proven, 30% pending.
+System 2 functional knowledge core: 90% proven, 10% pending production hardening.
+
+TEST BASELINE
+=============
+Before this stabilization pass: 132 passed.
+Final full suite: 192 passed, 185 warnings, 0 failures.
+
+CURRENT LIVE HEALTH (literal)
+=============================
+{"status":"healthy","services":{"api":"ok","postgres":"ok","redis":"ok","qdrant":"ok","kafka":"ok","ferretdb":"ok","object_storage":"ok"},"queues":{"indexing":{"queued":0,"processing":0,"retrying":0,"failed":0,"dead_lettered":1},"knowledge_sync":{"pending":0,"processing":0,"retrying":0}}}
+
+SYSTEM 1 -- PROVEN
+==================
+- Layout-aware mixed Markdown indexing preserves heading/section paths and distinguishes paragraph, table, and list chunks.
+- PDF, DOCX, TXT, CSV, XLSX, PPTX, EML/MSG body, images, and scanned-PDF OCR have loader code and regression coverage.
+- CSV, XLSX, PPTX, EML and OCR were exercised through the live Kafka worker. OCR produced the exact text "The scanned refund window is 45 days." and "Enterprise support response target is 2 hours."
+- Uploads create persistent tenant-scoped indexing jobs with status, retry, attempt count, errors, document ID, and new/duplicate/new_version disposition.
+- Kafka uses manual commits, bounded retry, a DLQ, and a worker restart supervisor. A deliberately missing source reached dead_lettered after 3 attempts and was present in the live DLQ.
+- MinIO S3-compatible storage is enabled. Local staging was temporarily moved aside and the exact source was restored from object storage.
+- Safe website ingestion enforces authorization confirmation, public HTTP(S), no embedded credentials, DNS pinning, no private/reserved addresses, same-domain navigation, robots rules, page/byte limits, and Playwright fallback.
+- All 11 UI knowledge tabs have schemas, deterministic extraction coverage, operational publishers, and automated extraction-to-publish tests: Products, Services, Pricing, Plans, Policies, FAQs, Competitors, Customer Segments, Sales Processes, Support Processes, Payment Processes.
+
+LIVE WEBSITE OUTPUT (literal)
+=============================
+{"job_id":"5f8fbe2a-4d79-43de-8cb8-93cd0ee6e3e2","status":"queued","source_uri":"https://follei-v3.vercel.app/signup","pages_crawled":1,"disposition":"pending"}
+{"job_id":"5f8fbe2a-4d79-43de-8cb8-93cd0ee6e3e2","document_id":"ababe381-1d9a-4a62-b942-b7afc3e2ec10","status":"indexed","disposition":"new","attempt_count":1,"object_key":"tenants/ec495aee-4993-46c9-92fc-b705995f557c/sources/5f8fbe2a-4d79-43de-8cb8-93cd0ee6e3e2.txt"}
+
+SYSTEM 2 -- PROVEN
+==================
+- Chat calls the orchestrator and combines approved PostgreSQL facts, graph relations, approved Qdrant document evidence, and FerretDB memory.
+- Citations identify qdrant_chunk, postgres_fact, graph_relation, and ferretdb_memory provenance.
+- BM25, neighbour expansion, and dense Qdrant retrieval now enforce approved-only evidence in the retrieval primitives.
+- Draft-only phrase proof: BM25 returned [], neighbour expansion returned [], Qdrant approved points contained_draft_phrase=false.
+- Fact approval publishes an operational PostgreSQL record and atomically creates a retryable outbox event; the worker synchronizes Qdrant approval metadata.
+- A live Qdrant outage recovered: event f6c64658-c878-4a28-80f7-30736ece7e7d completed after 6 attempts with postgres=completed and qdrant=completed.
+- Conflicting approved prices (USD 999 and USD 1299) caused chat to withhold an answer and return a conflicts array. Resolution kept USD 999, superseded USD 1299 in PostgreSQL/Qdrant/graph, and subsequent chat returned USD 999 with no conflict.
+- Retrieval telemetry is stored for every real chat request.
+- FerretDB contains both onboarding memory and durable conversation summary memory.
+- JWT tenant checks cover upload, chat, orchestrator, facts, chunk review, conflicts, conversation turns/history/close, websites, and indexing jobs.
+- Shared worker context has a validated contract for support, SDR, sales, customer success, collections, account manager, executive, and general workers.
+
+LIVE APPROVAL / CHAT OUTPUT
+===========================
+Policy: draft b245ae70-6f17-433b-9d18-bad34a23518f -> policies/e0a38e5b-5339-453d-aa1d-7a5ef190de01; PostgreSQL tags include approval:approved; outbox completed in 1 attempt; Qdrant approval_status=approved.
+Pricing: draft f391917b-7b39-4062-b556-85b582b88ebd -> pricing_models/c17c1017-976b-40d3-8358-732c6c90e1be; PostgreSQL tags include approval:approved; outbox completed in 1 attempt; Qdrant approval_status=approved.
+Plan: draft b616f28a-c153-4b0c-a1ae-e68e5a11b697 -> business_plans/0342cedb-c14b-40e8-b161-4c431528bd24; PostgreSQL tags include approval:approved; outbox completed in 1 attempt; Qdrant approval_status=approved.
+
+Refund chat: HTTP 200, answer contains "45 days", supported=true, confidence=0.7, conflicts=[], with qdrant_chunk + postgres_fact + graph_relation + ferretdb_memory citations.
+Price chat: HTTP 200, answer contains "USD 999 per month", supported=true, conflicts=[].
+Seats chat: HTTP 200, answer contains "100", supported=true, conflicts=[].
+Support chat: HTTP 200, answer contains "2 hours", supported=true, conflicts=[].
+
+Tenant mismatch (literal): HTTP 403 {"detail":"Tenant does not match authenticated user"}
+Same-tenant job read: HTTP 200.
+
+FERRETDB LIVE RECORDS
+=====================
+Onboarding: industry=SaaS; goals=[Increase Revenue, Improve Customer Satisfaction]; contact_channels=[Email, WhatsApp].
+Conversation: pain_point=Replacing Salesforce; budget=Budget is $5000; preference=Email follow-up; competitor=Salesforce.
+
+DATABASE / ENVIRONMENT
+======================
+Database identity: current_user=follei, database=follei_main, schema=public.
+Public tables: 96.
+Role follei has SELECT, INSERT, UPDATE, DELETE, REFERENCES, TRIGGER, and TRUNCATE on all 96 tables.
+Migration head: 20260720_indexing_jobs.
+
+Redacted environment:
+DATABASE_URL=<set>
+MISTRAL_API_KEY=<set>
+FERRETDB_URL=mongodb://<redacted>@localhost:27017/ferret_context
+REDIS_URL=redis://localhost:6379/0
+KAFKA_BOOTSTRAP_SERVERS=localhost:9092
+KAFKA_TOPIC_INDEXING=document-indexing
+QDRANT_URL=http://localhost:6333
+QDRANT_COLLECTION_NAME=follei_chunks
+OBJECT_STORAGE_ENABLED=true
+OBJECT_STORAGE_ENDPOINT_URL=http://localhost:9000
+OBJECT_STORAGE_ACCESS_KEY=<set>
+OBJECT_STORAGE_SECRET_KEY=<set>
+OBJECT_STORAGE_BUCKET=follei-uploads
+
+WHAT IS STILL NOT PROVEN / NOT FINISHED
+=======================================
+1. External proposal connectors (Google Drive, OneDrive, SharePoint, Notion, Confluence, Gmail/Outlook account sync, WhatsApp, Teams, Slack, CRM, ERP, LMS, accounting and ticketing platforms) require provider applications, credentials, consent scopes, and connector-specific live validation. Existing connector interfaces are not equivalent to live integrations.
+2. Legacy binary .ppt conversion code requires LibreOffice/soffice on the host; it was not live-proven on this machine. PPTX is proven.
+3. MSG bounded attachment extraction has automated coverage, but no representative real-world .msg attachment fixture was supplied for a live Kafka proof.
+4. The safe crawler intentionally ingests bounded readable page text. It does not mirror arbitrary video/audio/other-media folders from the universal scraper because that would bypass the knowledge-ingestion size/type and security policy. Linked binary document ingestion can be added as a separately bounded feature.
+5. All knowledge categories have end-to-end automated extraction/publish tests, but the live mixed validation document naturally exercised policy, pricing, plan and FAQ rather than every category.
+6. MinIO is live locally and uses persistent Docker storage; production still needs a managed S3-compatible endpoint, rotated credentials, bucket lifecycle/retention policy, encryption policy, backups and restore drills.
+7. Production load tests, alert dashboards, multi-node Kafka/Qdrant/PostgreSQL/FerretDB high availability, disaster recovery, and long-duration soak tests are not established by this local proof.
+8. Actual SDR/sales/customer-success worker behavior belongs to System 5. System 2 now exposes and tests their shared context contract, but it does not implement those workers.
+9. Brevo/campaign delivery remains deliberately deferred, as requested.
+
+BOTTOM LINE
+===========
+The PDF/DOCX/document-and-safe-website knowledge slice is ready for controlled onboarding use: it queues durably, indexes with layout metadata, requires human approval, synchronizes PostgreSQL and Qdrant through a retryable outbox, retrieves approved evidence only, exposes conflicts instead of guessing, cites every knowledge layer, remembers onboarding/conversations, and enforces tenant boundaries.
+
+The full System 1 product proposal is not finished because the many external business-source connectors and production operations listed above are separate integrations. System 2's functional knowledge core is working; its remaining work is primarily production hardening and downstream System 5 worker adoption.

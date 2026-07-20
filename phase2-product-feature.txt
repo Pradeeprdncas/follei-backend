@@ -1,0 +1,9 @@
+PRODUCT: Follei Autonomous Workforce Platform
+
+Description: Follei is a tenant-scoped autonomous business workforce platform.
+Features:
+- Grounded Worker Context
+- Human-reviewed Business Facts
+- Hybrid Semantic Retrieval
+
+Grounded Worker Context provides approved PostgreSQL facts, Qdrant document evidence, graph relationships, and FerretDB memory to every AI worker.

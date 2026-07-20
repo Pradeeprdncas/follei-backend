@@ -11,6 +11,16 @@ def looks_like_table(text: str) -> bool:
     if len(lines) < 3:
         return False
 
+    # Delimited tables survive many PDF/DOCX extractors as literal pipes rather
+    # than aligned whitespace.  Two data/header rows are sufficient evidence;
+    # prose documents using a single pipe should still take the layout path.
+    pipe_rows = sum(1 for line in lines if line.count("|") >= 2)
+    # A policy/handbook may contain a few tables. Treat it as table-oriented
+    # only when rows dominate the document, otherwise hierarchy chunking keeps
+    # the surrounding headings and prose retrievable.
+    if pipe_rows >= 2 and pipe_rows / len(lines) >= 0.60:
+        return True
+
     score = 0
 
     for line in lines:

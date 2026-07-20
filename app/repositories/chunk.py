@@ -33,7 +33,7 @@ class ChunkRepository:
         """Return chunks for a tenant. Callers apply approval filtering (see approval.py)."""
         return self.db.query(Chunk).filter(Chunk.tenant_id == tenant_id).all()
 
-    def set_tags(self, chunk_id: str, tags: list[str]) -> Chunk | None:
+    def set_tags(self, chunk_id: str, tags: list[str], *, commit: bool = True) -> Chunk | None:
         chunk = self.get_by_id(chunk_id)
         if not chunk:
             return None
@@ -42,8 +42,14 @@ class ChunkRepository:
         metadata = dict(chunk.metadata_ or {})
         metadata["tags"] = tags
         chunk.metadata_ = metadata
-        self.db.commit()
-        self.db.refresh(chunk)
+        # Review approval needs to update the fact, source chunk, graph event
+        # and outbox row in one PostgreSQL transaction.  Older standalone
+        # callers retain the committing default.
+        if commit:
+            self.db.commit()
+            self.db.refresh(chunk)
+        else:
+            self.db.flush()
         return chunk
 
     def get_by_embedding_hash(self, embedding_hash: str) -> Chunk | None:

@@ -52,7 +52,9 @@ class ToolExecutor:
         self, tool_name: str, context: MCPContext, params: Dict[str, Any]
     ) -> MCPResult:
         """Executes a tool within the validated pipeline environment."""
-        start_time = time.time()
+        # perf_counter_ns is monotonic and has enough resolution for in-memory
+        # tools; time.time() can return the same tick and report a false 0.0 ms.
+        start_time_ns = time.perf_counter_ns()
         
         # 1. Cache Lookup for Read-Only operations
         is_read_operation = any(prefix in tool_name for prefix in ("list", "search", "read", "get"))
@@ -103,14 +105,14 @@ class ToolExecutor:
                 await self.circuit_breaker.record_failure()
 
             # Record latency metrics and log success
-            latency = (time.time() - start_time) * 1000.0
+            latency = max((time.perf_counter_ns() - start_time_ns) / 1_000_000.0, 0.001)
             result.latency_ms = latency
             record_tool_duration(tool_name, latency)
             await self.audit_logger.log_success(tool_name, context, result)
             return result
             
         except Exception as e:
-            latency = (time.time() - start_time) * 1000.0
+            latency = max((time.perf_counter_ns() - start_time_ns) / 1_000_000.0, 0.001)
             record_tool_failure(tool_name, type(e).__name__)
             await self.audit_logger.log_failure(tool_name, context, e, latency)
             

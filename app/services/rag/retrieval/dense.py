@@ -3,7 +3,7 @@ from app.config.qdrant import get_qdrant
 from app.services.rag.embeddings.mistral import embed_texts
 from app.config.settings import get_settings
 from loguru import logger
-from app.services.rag.retrieval.approval import approved_filter, requires_approval
+from app.services.rag.retrieval.approval import approved_filter
 
 _settings = get_settings()
 
@@ -27,7 +27,7 @@ async def retrieve_dense(query: str, tenant_id: str, top_k: int = 5, category: s
             query=query_vector,  # Modern parameter accepts raw list[float]
             limit=top_k,
             # Filter matches by user tenancy boundary if applicable
-            query_filter=approved_filter(tenant_id, require_approved=requires_approval(query, category) if require_approved is None else require_approved) if tenant_id else None
+            query_filter=approved_filter(tenant_id) if tenant_id else None
         )
 
         # 3. Formulate standard chunk dictionaries from ScoredPoints list

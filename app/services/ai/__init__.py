@@ -42,4 +42,4 @@ __all__ = [
 
 def get_ai_service():
     """Default AI entry point — returns the unified AIGateway."""
-    return get_ai_gateway()
+    return get_ai_router()

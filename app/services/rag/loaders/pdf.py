@@ -1,5 +1,9 @@
 import fitz
+from io import BytesIO
 from pathlib import Path
+import shutil
+from PIL import Image
+import pytesseract
 
 def extract_pdf_text(file_path):
 
@@ -45,11 +49,23 @@ def extract_pdf_text(file_path):
 
                 page_text.append(text)
 
+        extracted = "\n".join(page_text)
+        # Scan-only PDFs have no selectable text. Render just that page and
+        # use local Tesseract; never OCR a text-rich PDF unnecessarily.
+        if not extracted.strip():
+            command = shutil.which("tesseract") or r"C:\Program Files\Tesseract-OCR\tesseract.exe"
+            if Path(command).exists():
+                pytesseract.pytesseract.tesseract_cmd = command
+                pix = page.get_pixmap(matrix=fitz.Matrix(2, 2), alpha=False)
+                # pytesseract accepts PIL images, NumPy arrays, and paths—not
+                # encoded PNG bytes. Decode the rendered pixmap explicitly.
+                with Image.open(BytesIO(pix.tobytes("png"))) as image:
+                    extracted = pytesseract.image_to_string(image)
         pages.append(
             {
                 "page": page_number + 1,
                 "heading": current_heading,
-                "text": "\n".join(page_text)
+                "text": extracted
             }
         )
 

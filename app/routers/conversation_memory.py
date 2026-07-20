@@ -14,7 +14,14 @@ router = APIRouter(prefix="/knowledge/conversations", tags=["knowledge-conversat
 
 
 @router.get("/{conversation_id}")
-def conversation_history(conversation_id: UUID, tenant_id: UUID, limit: int = 50, db: Session = Depends(get_db)):
+def conversation_history(
+    conversation_id: UUID,
+    tenant_id: UUID,
+    limit: int = 50,
+    db: Session = Depends(get_db),
+    authenticated_tenant_id: str = Depends(get_authenticated_tenant_id),
+):
+    require_matching_tenant(tenant_id, authenticated_tenant_id)
     result = get_conversation_history(db, tenant_id=tenant_id, conversation_id=conversation_id, limit=limit)
     if not result:
         raise HTTPException(status_code=404, detail="Conversation not found for tenant")
@@ -51,7 +58,13 @@ async def persist_turn(
 
 
 @router.post("/{conversation_id}/close")
-async def close_conversation(conversation_id: UUID, tenant_id: UUID, db: Session = Depends(get_db)):
+async def close_conversation(
+    conversation_id: UUID,
+    tenant_id: UUID,
+    db: Session = Depends(get_db),
+    authenticated_tenant_id: str = Depends(get_authenticated_tenant_id),
+):
+    require_matching_tenant(tenant_id, authenticated_tenant_id)
     from datetime import datetime
     from app.models.conversations.conversation import Conversation
     from app.services.knowledge.conversation_memory import summarize_conversation
@@ -63,5 +76,4 @@ async def close_conversation(conversation_id: UUID, tenant_id: UUID, db: Session
     db.commit()
     summary = await summarize_conversation(tenant_id=tenant_id, conversation_id=conversation.id, force=True)
     return {"conversation_id": str(conversation.id), "status": "closed", "summary_id": str(summary.id) if summary else None}
-
 

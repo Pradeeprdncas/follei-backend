@@ -1,0 +1,8 @@
+Payment Process: Monthly invoice collection
+
+Description: Send an invoice on the first business day of each month and follow up before the due date.
+Steps:
+1. Generate the approved customer invoice.
+2. Send the invoice to the billing contact.
+3. Send a reminder three days before the due date.
+4. Escalate overdue invoices to collections after seven days.

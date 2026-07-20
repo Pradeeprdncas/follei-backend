@@ -10,13 +10,13 @@ def test_approval_policy_requires_approved_for_pricing_policy_plan_faq():
     assert requires_approval("How does onboarding work?", category="faq")
     query_filter = approved_filter("tenant-a", require_approved=True)
     assert {item["key"] for item in query_filter["must"]} == {"tenant_id", "approval_status"}
-    assert approved_filter("tenant-a", require_approved=False)["must"] == [{"key": "tenant_id", "match": {"value": "tenant-a"}}]
+    assert {item["key"] for item in approved_filter("tenant-a", require_approved=False)["must"]} == {"tenant_id", "approval_status"}
 
 
 @pytest.mark.asyncio
 async def test_orchestrator_merges_all_four_sources_in_fixed_order(monkeypatch):
     calls = []
-    monkeypatch.setattr(orchestrator, "load_postgres_context", lambda db, tenant_id, lead_id: ({"tenant_id": tenant_id, "lead": {"status": "qualified"}}, [{"from": "lead-1", "relation": "needs", "to": "Moodle"}]))
+    monkeypatch.setattr(orchestrator, "load_postgres_context", lambda db, tenant_id, lead_id, query: ({"tenant_id": tenant_id, "lead": {"status": "qualified"}}, [{"from": "lead-1", "relation": "needs", "to": "Moodle"}]))
     async def fake_retrieve(query, tenant_id, top_k=5):
         calls.append("qdrant")
         return [{"chunk_id": "chunk-1", "document_id": "doc-1", "page": 4, "heading_path": ["Pricing", "Enterprise"], "approval_status": "approved", "text": "Moodle integration", "source_type": "pdf"}]

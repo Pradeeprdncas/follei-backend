@@ -20,6 +20,12 @@ class Settings(BaseSettings):
     FERRETDB_DATABASE: str = Field(default="ferret_context")
     FERRETDB_USER: str = Field(default="")
     FERRETDB_PASSWORD: str = Field(default="")
+    OBJECT_STORAGE_ENABLED: bool = False
+    OBJECT_STORAGE_ENDPOINT_URL: str = "http://localhost:9000"
+    OBJECT_STORAGE_ACCESS_KEY: str = "follei"
+    OBJECT_STORAGE_SECRET_KEY: str = "follei-local-object-storage"
+    OBJECT_STORAGE_BUCKET: str = "follei-uploads"
+    OBJECT_STORAGE_REGION: str = "us-east-1"
 
     # Ã¢â€â‚¬Ã¢â€â‚¬ Qdrant Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
     QDRANT_URL: str = Field(default="http://localhost:6333")
@@ -32,12 +38,15 @@ class Settings(BaseSettings):
     MISTRAL_EMBEDDING_MODEL: str = "mistral-embed"
     MISTRAL_CHAT_MODEL: str = "mistral-medium-2508"
     MISTRAL_API_BASE: str = "https://api.mistral.ai/v1"
+    AI_MODELS: str = Field(default="AI_MODELS", description="Canonical local AI model root")
 
     # Ã¢â€â‚¬Ã¢â€â‚¬ Kafka Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
     KAFKA_BOOTSTRAP_SERVERS: str = "localhost:9092"
     KAFKA_TOPIC_INDEXING: str = "document-indexing"
+    KAFKA_TOPIC_INDEXING_DLQ: str = "document-indexing-dlq"
     KAFKA_TOPIC_CHAT: str = "chat-requests"
     KAFKA_CONSUMER_GROUP: str = "follei-rag-group"
+    KAFKA_INDEXING_MAX_ATTEMPTS: int = 3
 
     # Ã¢â€â‚¬Ã¢â€â‚¬ RAG Pipeline Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
     CHUNK_SIZE: int = 512
@@ -95,6 +104,3 @@ class Settings(BaseSettings):
 def get_settings() -> Settings:
     """Singleton settings instance."""
     return Settings()
-
-
-

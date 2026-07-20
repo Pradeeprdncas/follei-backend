@@ -1,0 +1,463 @@
+Delivered-To: niranjanadiga1989@gmail.com
+Received: by 2002:a05:7118:2316:b0:1dd:cd6:bd45 with SMTP id y22csp60666gga;
+        Mon, 13 Jul 2026 04:01:22 -0700 (PDT)
+X-Received: by 2002:a05:6a20:72a0:b0:3b4:6026:6c5d with SMTP id adf61e73a8af0-3c1102d7d30mr8997692637.5.1783940482681;
+        Mon, 13 Jul 2026 04:01:22 -0700 (PDT)
+ARC-Seal: i=1; a=rsa-sha256; t=1783940482; cv=none;
+        d=google.com; s=arc-20260327;
+        b=NZDEt52bXPwE2sznJPI1mjmPWzHnHfOdDOald14BWMGsQktUwKufxFG4DypEAlrtwe
+         9Fh3wBGue/iLW2x6qG+omJSqMr9trl6UuiiT6FK64QFUSUrWkGh41ZE36vjjXlnzJBh9
+         kUYXYhe98FxFXXkQ66JRAFV+IIasETgdAU0FlH4u5u6vrQGFv1fhoSAMe+RG7qsdh+Ed
+         K1IIuGZB1iaENv6FMif18hp32bpoFE9rzFgSFBR7gvVqRcAvdH6/dIlf3LzyKp2LfblR
+         nwK8A8AD1PBwxQNNnQq1GDmThzGxWNtoZ9GZnExHzICdP3woMag4qYfbDgF2amJlfjYi
+         GC9g==
+ARC-Message-Signature: i=1; a=rsa-sha256; c=relaxed/relaxed; d=google.com; s=arc-20260327;
+        h=feedback-id:date:message-id:mime-version:subject:to:reply-to:from
+         :dkim-signature:dkim-signature;
+        bh=ACZXvZ/0qU9DCbJijcqi5WKRe0Y5NzPkOQTDhlVfeYM=;
+        fh=3oe/5YB9KR3xPkT8U3rZSRCFPeSAVAjMZN8jYhNYACU=;
+        b=oGzKLggmTI1BJ0+uvDCV4Z/eznMAeS/bKZnzVxbwpmzShDRPPjY0vRLj8wqSvY78no
+         CHOenv/h4hZsEgmmGmiuCh3A8HXUz+6nwPgWdwxXltrEXnikIk407ZeQdiH2czOzDCN/
+         I9IRpCr94sl1lGDKkbXbEXrM1IVo+zQHGRVZCCaAxVuM8pGjGpLiftm6zuH0cTnhhRwN
+         tsGqn0Rr9rNR+NBgwiOifcQlIdiUk3KyJ2fwf7klgXFTMKcwIx6rK9eNGrr4cKHMZhnI
+         nFSbu8yaJkWG3RoVn1O5e3BN9gVC/tfAPhYm48KXGsPnll58niKaovtXJeXiJGZiXFdC
+         /B5w==;
+        dara=google.com
+ARC-Authentication-Results: i=1; mx.google.com;
+       dkim=pass header.i=@propeers.in header.s=x463fxyc5h2rn3bzdcam2fyledjqtdm6 header.b=clVfXrMO;
+       dkim=pass header.i=@amazonses.com header.s=rlntogby6xsxlfnvyxwnvvhttakdsqto header.b=YCDu9jL+;
+       spf=pass (google.com: domain of 0109019f5b23815c-38f27597-17fe-4754-b6c0-fb17da4557aa-000000@ap-south-1.amazonses.com designates 76.223.180.106 as permitted sender) smtp.mailfrom=0109019f5b23815c-38f27597-17fe-4754-b6c0-fb17da4557aa-000000@ap-south-1.amazonses.com;
+       dmarc=pass (p=NONE sp=NONE dis=NONE) header.from=propeers.in
+Return-Path: <0109019f5b23815c-38f27597-17fe-4754-b6c0-fb17da4557aa-000000@ap-south-1.amazonses.com>
+Received: from c180-106.smtp-out.ap-south-1.amazonses.com (c180-106.smtp-out.ap-south-1.amazonses.com. [76.223.180.106])
+        by mx.google.com with ESMTPS id a92af1059eb24-13b659fbf7fsi107234257c88.74.2026.07.13.04.01.21
+        for <niranjanadiga1989@gmail.com>
+        (version=TLS1_3 cipher=TLS_AES_128_GCM_SHA256 bits=128/128);
+        Mon, 13 Jul 2026 04:01:22 -0700 (PDT)
+Received-SPF: pass (google.com: domain of 0109019f5b23815c-38f27597-17fe-4754-b6c0-fb17da4557aa-000000@ap-south-1.amazonses.com designates 76.223.180.106 as permitted sender) client-ip=76.223.180.106;
+Authentication-Results: mx.google.com;
+       dkim=pass header.i=@propeers.in header.s=x463fxyc5h2rn3bzdcam2fyledjqtdm6 header.b=clVfXrMO;
+       dkim=pass header.i=@amazonses.com header.s=rlntogby6xsxlfnvyxwnvvhttakdsqto header.b=YCDu9jL+;
+       spf=pass (google.com: domain of 0109019f5b23815c-38f27597-17fe-4754-b6c0-fb17da4557aa-000000@ap-south-1.amazonses.com designates 76.223.180.106 as permitted sender) smtp.mailfrom=0109019f5b23815c-38f27597-17fe-4754-b6c0-fb17da4557aa-000000@ap-south-1.amazonses.com;
+       dmarc=pass (p=NONE sp=NONE dis=NONE) header.from=propeers.in
+DKIM-Signature: v=1; a=rsa-sha256; q=dns/txt; c=relaxed/simple;
+	s=x463fxyc5h2rn3bzdcam2fyledjqtdm6; d=propeers.in; t=1783940481;
+	h=From:Reply-To:To:Subject:MIME-Version:Content-Type:Message-ID:Date;
+	bh=ADlYioGYoRYbdwXRb9Myo9V5TS/1K2QMAMFvwxghDe0=;
+	b=clVfXrMOvSnV7h5H+UOromk1V5ZNQ+OgC4cCyu3N4GErbGYGzV/4F04mBbP+vKCz
+	L2371xvWkuMzwiBHe1mhRTYoDok+jkl8yK5xDfRSR+7/4ZHTtVyaqsmsW4Xm8XEmOsc
+	mmZ811bMHU2+sZx/IJLDhBk4SaOVHepS6wtk9bT8=
+DKIM-Signature: v=1; a=rsa-sha256; q=dns/txt; c=relaxed/simple;
+	s=rlntogby6xsxlfnvyxwnvvhttakdsqto; d=amazonses.com; t=1783940481;
+	h=From:Reply-To:To:Subject:MIME-Version:Content-Type:Message-ID:Date:Feedback-ID;
+	bh=ADlYioGYoRYbdwXRb9Myo9V5TS/1K2QMAMFvwxghDe0=;
+	b=YCDu9jL+C1Aaz/wtscZbQ9OekukgSjuFnETD7lyNJvhfgnrIVfXMbkSDCIfLPvaq
+	3elJ9eBNRXUTi45/j72HI2KlP+/ftq7miPqxYhxe8FVGGY2mRX8LFXuBKBZNpAlEkMW
+	b3d29uc7hbDP8n4e5SfkQej8Wn5kFJX33Ic95sXs=
+From: Rahul <no-reply@propeers.in>
+Reply-To: propeers.parikh@gmail.com, shubh.propeers@gmail.com, 
+	propeers.pranav@gmail.com, tusharsikka.propeers@gmail.com, 
+	garima.propeers@gmail.com, aanchal.propeers@gmail.com, 
+	propeers.tanvi@gmail.com
+To: niranjanadiga1989@gmail.com
+Subject: Tier 3 College to Microsoft
+MIME-Version: 1.0
+Content-Type: multipart/alternative; 
+	boundary="----=_Part_1457748_1606373883.1783940481372"
+Message-ID: <0109019f5b23815c-38f27597-17fe-4754-b6c0-fb17da4557aa-000000@ap-south-1.amazonses.com>
+Date: Mon, 13 Jul 2026 11:01:21 +0000
+Feedback-ID: ::1.ap-south-1.ke8Mai8DaCyhFQoC/cwaG4enVBuObF8VeBYaiFffQjQ=:AmazonSES
+X-SES-Outgoing: 2026.07.13-76.223.180.106
+
+------=_Part_1457748_1606373883.1783940481372
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 7bit
+
+This is the body
+------=_Part_1457748_1606373883.1783940481372
+Content-Type: text/html; charset=UTF-8
+Content-Transfer-Encoding: quoted-printable
+
+<!DOCTYPE html>
+    <html>
+   =20
+    <head>
+        <meta charset=3D"UTF-8">
+        <style>
+            body {
+                background-color: #ffffff;
+                font-family: Arial, sans-serif;
+                font-size: 16px;
+                line-height: 1.4;
+                color: #333333;
+                margin: 0;
+                padding: 0;
+            }
+   =20
+            .container {
+                max-width: 600px;
+                margin: 0 auto;
+                padding: 20px;
+            }
+   =20
+            .logo {
+                max-width: 140px;
+                margin-bottom: 5px;
+                margin-left: auto;
+                margin-right: auto;
+            }
+   =20
+            .body {
+                font-size: 16px;
+                margin-bottom: 20px;
+                text-align: left; /* Left-align the content within the body=
+ */
+            }
+   =20
+            .message {
+                font-size: 16px;
+                font-weight: 500;
+                margin-bottom: 10px;
+            }
+   =20
+            .follow-text {
+                font-weight: 600;
+                font-size: 14px;
+            }
+   =20
+            .footer-text {
+                text-align: left;
+                font-size: 12px;
+                font-weight: 500;
+                float: left;
+            }
+   =20
+            .icon {
+                max-width: 20px;
+                margin-left: 12px;
+                margin-right: 12px;
+                text-decoration: none;
+            }
+   =20
+            .footer {}
+   =20
+            .unsubscribe-text {
+                font-size: 12px;
+                font-weight: 400;
+                color: #e0e0e0;
+                float: right;
+            }
+
+            .textCenter{
+                text-align: center;
+            }
+
+            .alignContent{
+                display: flex;
+               justify-content: center;
+               align-items: center;
+            }
+
+           =20
+            .img-container {
+                margin: 0 auto;
+            }
+        </style>
+   =20
+    </head>
+   =20
+    <body>
+        <div class=3D"container">
+           <div class=3D"textCenter">
+           <a href=3D"https://www.propeers.in"><img class=3D"logo"
+                    src=3D"https://cdn.propeers.in/new-propeers-logo.png" a=
+lt=3D""></a>
+            </div>
+           =20
+            <div class=3D"body">
+                <!DOCTYPE html>
+<html lang=3D"en">
+<head>
+  <meta charset=3D"UTF-8">
+  <meta name=3D"viewport" content=3D"width=3Ddevice-width, initial-scale=3D=
+1.0">
+  <title>Free Trial Mentorship</title>
+</head>
+
+<body style=3D"margin:0; padding:0; background-color:#f4f4f4; font-family:A=
+rial, sans-serif; color:#222222;">
+
+<table width=3D"100%" cellpadding=3D"0" cellspacing=3D"0" border=3D"0" styl=
+e=3D"background-color:#f4f4f4; padding:30px 0;">
+  <tr>
+    <td align=3D"center">
+
+      <table width=3D"600" cellpadding=3D"0" cellspacing=3D"0" border=3D"0"=
+ style=3D"background:#ffffff; border-radius:12px;">
+
+        <tr>
+          <td style=3D"padding:45px 40px;">
+
+            <p style=3D"margin-top:0; font-size:16px; line-height:1.8;">
+              Hi U,
+            </p>
+
+            <p style=3D"font-size:16px; line-height:1.8;">
+              I went from a tier-3 college with zero placement support to a=
+ Microsoft offer letter in 5 months.
+            </p>
+
+            <p style=3D"font-size:16px; line-height:1.8;">
+              I'm Rahul, SDE II at Microsoft. Two years ago, I was one of 3=
+00 students at a college most recruiters had never heard of. No campus driv=
+es from big tech. No seniors to ask "how do I even start."
+            </p>
+
+            <p style=3D"font-size:16px; line-height:1.8;">
+              The problem wasn't my potential. It was that nobody around me=
+ knew what the bar actually looked like.
+            </p>
+
+            <p style=3D"font-size:16px; line-height:1.8;">
+              So I booked a free call with a ProPeers mentor.
+            </p>
+
+            <p style=3D"font-size:16px; line-height:1.8;">
+              That 15-minute call rewired my entire approach.
+            </p>
+
+            <!-- CTA -->
+
+            <table width=3D"100%" cellpadding=3D"0" cellspacing=3D"0" borde=
+r=3D"0" style=3D"margin:30px 0;">
+              <tr>
+                <td align=3D"center">
+
+                  <table cellpadding=3D"0" cellspacing=3D"0" border=3D"0">
+                    <tr>
+                      <td bgcolor=3D"#2563eb" style=3D"border-radius:8px;">
+                        <a href=3D"https://www.propeers.in/free-trial?utm_s=
+ource=3Dorganic&utm_medium=3Demail-admin&utm_campaign=3Dfree-trial-success-=
+story-july-13th"
+                           target=3D"_blank"
+                           style=3D"display:inline-block; padding:14px 28px=
+; color:#ffffff; text-decoration:none; font-size:16px; font-weight:bold;">
+                          =F0=9F=91=89 Book your free 15-minute trial
+                        </a>
+                      </td>
+                    </tr>
+                  </table>
+
+                </td>
+              </tr>
+            </table>
+
+            <p style=3D"font-size:16px; line-height:1.8;">
+              Today, I'm writing code at Microsoft.
+            </p>
+
+            <p style=3D"font-size:18px; font-weight:bold; color:#111827;">
+              Here's what actually moved the needle:
+            </p>
+
+            <ul style=3D"padding-left:20px; margin-top:15px;">
+
+              <li style=3D"margin-bottom:8px; font-size:16px; line-height:1=
+.6;">
+                <strong>Custom Roadmap</strong> =E2=80=94 Focused prep. Onl=
+y what interviewers actually ask.
+              </li>
+
+              <li style=3D"margin-bottom:8px; font-size:16px; line-height:1=
+.6;">
+                <strong>Resume &amp; LinkedIn Overhaul</strong> =E2=80=94 A=
+pplications that become interviews.
+              </li>
+
+              <li style=3D"margin-bottom:8px; font-size:16px; line-height:1=
+.6;">
+                <strong>Mock Interviews with Real Feedback</strong> =E2=80=
+=94 Not encouragement. Improvement.
+              </li>
+
+              <li style=3D"margin-bottom:8px; font-size:16px; line-height:1=
+.6;">
+                <strong>Off-Campus Strategy</strong> =E2=80=94 How to get n=
+oticed when there's no campus drive to rely on.
+              </li>
+
+              <li style=3D"font-size:16px; line-height:1.6;">
+                <strong>Direct Accountability</strong> =E2=80=94 A Senior S=
+DE watching your back.
+              </li>
+
+            </ul>
+
+            <p style=3D"font-size:16px; line-height:1.8;">
+              One decision separated the old me from where I am now.
+            </p>
+
+            <!-- Final CTA -->
+
+            <table width=3D"100%" cellpadding=3D"0" cellspacing=3D"0" borde=
+r=3D"0" style=3D"margin:30px 0;">
+              <tr>
+                <td align=3D"center">
+
+                  <table cellpadding=3D"0" cellspacing=3D"0" border=3D"0">
+                    <tr>
+                      <td bgcolor=3D"#111827" style=3D"border-radius:8px;">
+                        <a href=3D"https://www.propeers.in/free-trial?utm_s=
+ource=3Dorganic&utm_medium=3Demail-admin&utm_campaign=3Dfree-trial-success-=
+story-july-13th"
+                           target=3D"_blank"
+                           style=3D"display:inline-block; padding:14px 28px=
+; color:#ffffff; text-decoration:none; font-size:16px; font-weight:bold;">
+                          =F0=9F=91=89 Claim your free trial
+                        </a>
+                      </td>
+                    </tr>
+                  </table>
+
+                </td>
+              </tr>
+            </table>
+
+            <p style=3D"font-size:16px; line-height:1.8;">
+              Your college's name isn't on your offer letter. Your work is.
+            </p>
+
+            <div style=3D"margin-top:40px;">
+
+              <p style=3D"margin:0; font-size:16px;">
+                Rooting for you,
+              </p>
+
+              <p style=3D"margin:18px 0 0; font-size:18px; font-weight:bold=
+;">
+                Rahul Sharma
+              </p>
+
+              <p style=3D"margin:6px 0 0; font-size:15px; color:#6b7280;">
+                SDE II @ Microsoft | Tier-3 College =E2=86=92 Microsoft
+              </p>
+
+            </div>
+
+          </td>
+        </tr>
+
+      </table>
+
+    </td>
+  </tr>
+</table>
+
+</body>
+</html>
+            </div>
+
+    <table role=3D"presentation" valign=3D"top" border=3D"0" cellspacing=3D=
+"0" cellpadding=3D"0" width=3D"100%">
+                <tbody>
+                <tr>
+                <td style=3D"padding-bottom:16px;text-align:center">
+                    <h2 style=3D"margin:0;font-weight:500;font-size:20px">S=
+tay informed with the ProPeers App</h2>
+                </td>
+            </tr>
+            <tr>
+                <td style=3D"text-align:center">
+                    <a href=3D"https://apps.apple.com/in/app/propeers/id644=
+6427356" style=3D"text-decoration: none;">
+                        <img alt=3D"Download on the App Store" src=3D"https=
+://ci3.googleusercontent.com/meips/ADKq_Nb3K_tyUQe5MJXq5TBbkdaPEqtXrdx4s9uo=
+rYLmo9huzT4rm90pNvfQ1b9xHBvrhCLEUUUTw3M9s4lohvyz5NVd9E8DT7ISkQbQc4Di_FDKjwe=
+Yu5I=3Ds0-d-e1-ft#https://static.licdn.com/aero-v1/sc/h/76yzkd0h5kiv27lrd4y=
+aenylk" style=3D"outline:none;text-decoration:none;height:40px;width:120px;=
+padding-right:8px" width=3D"120" height=3D"40">
+                    </a>
+                    <a href=3D"https://play.google.com/store/apps/details?i=
+d=3Dcom.wireless.propeers" style=3D"text-decoration: none;">
+                        <img alt=3D"Get it on Google Play" src=3D"https://c=
+i3.googleusercontent.com/meips/ADKq_Na4vGlgWbb5d_c0BKM_aoF8r7kcJPwyVTRxmwOv=
+FvH-2PTgZmoPgRHgNxJfriUyoB3gL3BwEmtJqwvRPcuhYUFAgQ8U-unbpAYBdxVRmPzDb1gnZmE=
+=3Ds0-d-e1-ft#https://static.licdn.com/aero-v1/sc/h/142qudwblp58zwmc9vkqfpl=
+ug" style=3D"outline:none;text-decoration:none;height:40px;width:134px" wid=
+th=3D"134" height=3D"40">
+                    </a>
+                </td>
+            </tr>
+            <tr>
+                <td style=3D"padding-top:16px;padding-bottom:16px">
+                    <hr style=3D"height:1px;border-style:none;background-co=
+lor:#e0dfdd">
+                </td>
+            </tr>
+        </tbody>
+    </table>
+             =20
+  <table  cellpadding=3D"0" cellspacing=3D"0" border=3D"0" align=3D"center"=
+>
+  <tbody>
+      <tr>
+      <th colspan=3D"3" style=3D"padding-Bottom: 20px;" align=3D"center">
+          Follow us on
+      </th>
+      </tr>
+      <tr>
+          <td align=3D"center" width=3D"80">
+              <a href=3D"https://www.instagram.com/pro.peers/" style=3D"tex=
+t-decoration:none" target=3D"_blank">
+                  <img src=3D"https://upload.wikimedia.org/wikipedia/common=
+s/thumb/a/a5/Instagram_icon.png/600px-Instagram_icon.png" border=3D"0" widt=
+h=3D"30" height=3D"30" style=3D"border:none;outline:none;text-decoration:no=
+ne;font-size:19px;font-family:Helvetica Neue,Arial,sans-serif;color:#00aced=
+;font-weight:bold" alt=3D"instagram-icon" />
+              </a>
+          </td>
+          <td align=3D"center" width=3D"80">
+              <a href=3D"https://www.youtube.com/@parikh-jain" style=3D"tex=
+t-decoration:none" target=3D"_blank">
+                  <img src=3D"https://www.iconpacks.net/icons/2/free-youtub=
+e-logo-icon-2431-thumb.png" border=3D"0" width=3D"40" height=3D"40" style=
+=3D"border:none;outline:none;text-decoration:none;font-size:19px;font-famil=
+y:Helvetica Neue,Arial,sans-serif;color:#00aced;font-weight:bold" alt=3D"yo=
+utube-icon" />
+              </a>
+          </td>
+          <td align=3D"center" width=3D"80">
+              <a href=3D"https://www.linkedin.com/company/propeers/" style=
+=3D"text-decoration:none" target=3D"_blank">
+                  <img src=3D"https://cdn-icons-png.flaticon.com/128/3536/3=
+536505.png" border=3D"0" width=3D"30" height=3D"30" style=3D"border:none;ou=
+tline:none;text-decoration:none;font-size:19px;font-family:Helvetica Neue,A=
+rial,sans-serif;color:#00aced;font-weight:bold" alt=3D"linkedin-icon" />
+              </a>
+          </td>
+      </tr>
+       <tr>
+        <td colspan=3D"3" style=3D"padding-top: 40px;" align=3D"center" wid=
+th=3D"400">
+            This is an auto-generated email, please do not reply.
+        </td>
+    </tr>
+    <tr>
+        <td colspan=3D"3" style=3D"padding-top: 20px;" align=3D"center" wid=
+th=3D"400">
+            <a href=3D"https://propeers.in/unsubscribe/692a71f45d6624c2d1a3=
+b8d3/xxuY3AHH0ie7ELiv">Unsubscribe here</a>
+        </td>
+  </tbody>
+    =20
+</table>
+
+ </div>
+           =20
+           =20
+    </body>
+   =20
+    </html>
+   =20
+   =20
+------=_Part_1457748_1606373883.1783940481372--

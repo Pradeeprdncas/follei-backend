@@ -5,11 +5,17 @@ def requires_approval(query: str, category: str | None = None) -> bool:
     value = f"{query} {category or ''}".lower()
     return any(term in value for term in _APPROVAL_TERMS)
 
-def approved_filter(tenant_id: str, *, require_approved: bool) -> dict:
-    must = [{"key": "tenant_id", "match": {"value": str(tenant_id)}}]
-    if require_approved:
-        must.append({"key": "approval_status", "match": {"value": "approved"}})
-    return {"must": must}
+def approved_filter(tenant_id: str, *, require_approved: bool = True) -> dict:
+    """Return the mandatory tenant + approval boundary for document evidence.
+
+    ``require_approved`` is retained for compatibility with older callers, but
+    can no longer weaken the boundary. Draft evidence belongs in review APIs,
+    never in worker/chat retrieval.
+    """
+    return {"must": [
+        {"key": "tenant_id", "match": {"value": str(tenant_id)}},
+        {"key": "approval_status", "match": {"value": "approved"}},
+    ]}
 
 
 # Postgres document_chunks has no dedicated approval_status column; approval state

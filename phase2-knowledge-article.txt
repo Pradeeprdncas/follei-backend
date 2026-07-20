@@ -1,0 +1,3 @@
+KNOWLEDGE ARTICLE: How Follei grounds AI-worker answers
+
+Follei retrieves approved structured facts from PostgreSQL, semantic document evidence from Qdrant, graph relationships from PostgreSQL, and tenant memory from FerretDB. The orchestrator preserves provenance and trust rank so an AI worker can cite the evidence used for its answer. Human-reviewed facts outrank graph, vector, and memory evidence.

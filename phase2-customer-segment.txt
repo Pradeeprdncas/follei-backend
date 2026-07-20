@@ -1,0 +1,4 @@
+Customer Segment: Growth-stage SaaS teams
+
+Description: B2B SaaS companies with 50 to 500 employees that need always-on sales and support coverage.
+Criteria: employee_count=50-500; business_model=B2B SaaS; priority=reduce response times.

@@ -94,6 +94,43 @@ def test_approve_fact_draft_rejects_mismatched_tenant():
     assert resp.status_code == 403
 
 
+def test_get_fact_draft_rejects_mismatched_tenant():
+    resp = client.get(f"/knowledge/review/facts/{uuid.uuid4()}", params={"tenant_id": str(TENANT_B)}, headers=_auth_header(TENANT_A))
+    assert resp.status_code == 403
+
+
+def test_reject_fact_draft_rejects_mismatched_tenant():
+    resp = client.post(f"/knowledge/review/facts/{uuid.uuid4()}/reject", json={"tenant_id": str(TENANT_B), "reviewer": "human"}, headers=_auth_header(TENANT_A))
+    assert resp.status_code == 403
+
+
+def test_conflict_resolution_rejects_mismatched_tenant():
+    resp = client.post(
+        "/knowledge/review/conflicts/resolve",
+        json={
+            "tenant_id": str(TENANT_B),
+            "winner_fact_id": str(uuid.uuid4()),
+            "superseded_fact_ids": [str(uuid.uuid4())],
+            "reviewer": "human",
+            "reason": "canonical source",
+        },
+        headers=_auth_header(TENANT_A),
+    )
+    assert resp.status_code == 403
+
+
+def test_chunk_draft_routes_reject_mismatched_tenant():
+    assert client.get("/knowledge/review/drafts", params={"tenant_id": str(TENANT_B)}, headers=_auth_header(TENANT_A)).status_code == 403
+    assert client.post(f"/knowledge/review/{uuid.uuid4()}/approve", json={"tenant_id": str(TENANT_B)}, headers=_auth_header(TENANT_A)).status_code == 403
+    assert client.post(f"/knowledge/review/{uuid.uuid4()}/reject", json={"tenant_id": str(TENANT_B)}, headers=_auth_header(TENANT_A)).status_code == 403
+
+
+def test_conversation_read_and_close_reject_mismatched_tenant():
+    conversation_id = uuid.uuid4()
+    assert client.get(f"/knowledge/conversations/{conversation_id}", params={"tenant_id": str(TENANT_B)}, headers=_auth_header(TENANT_A)).status_code == 403
+    assert client.post(f"/knowledge/conversations/{conversation_id}/close", params={"tenant_id": str(TENANT_B)}, headers=_auth_header(TENANT_A)).status_code == 403
+
+
 def test_persist_turn_rejects_mismatched_tenant():
     resp = client.post(
         "/knowledge/conversations/turns",

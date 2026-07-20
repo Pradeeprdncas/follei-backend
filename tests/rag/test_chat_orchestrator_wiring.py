@@ -2,10 +2,19 @@
 must never silently pick a side when approved facts conflict."""
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
+from uuid import uuid4
 
 import pytest
 
 from app.services.rag.pipelines import chat as chat_module
+
+
+def test_retrieval_observability_payload_serializes_uuid_citations():
+    citation_id = uuid4()
+
+    safe = chat_module._json_safe([{"citation": {"fact_id": citation_id}}])
+
+    assert safe == [{"citation": {"fact_id": str(citation_id)}}]
 
 
 class _FakeDB:
@@ -86,6 +95,19 @@ def test_chat_pipeline_includes_approved_fact_in_context_and_citations(monkeypat
     assert len(fact_citations) == 1
     assert fact_citations[0]["fact_id"] == "fact-123"
     assert fact_citations[0]["citation"] == {"document_id": "doc-9"}
+
+
+def test_chat_pipeline_emits_graph_and_memory_provenance(monkeypatch):
+    async def context(**_kwargs):
+        return {"facts": {"approved": []}, "relationships": [{"source": "graph", "from": "Enterprise", "relation": "includes", "to": "Support", "citation": {"document_id": "doc-g"}, "trust_rank": 2}], "customer_context": {"source": "ferret", "subject_type": "tenant", "subject_id": "tenant-a", "trust_rank": 4}, "memory_evidence": [{"source": "ferret", "document_id": "doc-m", "title": "Support guide", "summary": "Support details", "projection_type": "indexed_document_summary", "trust_rank": 4}], "conflicts": []}
+    monkeypatch.setattr(chat_module, "retrieve_context", _fake_retrieve_context)
+    monkeypatch.setattr(chat_module, "build_agent_context", context)
+    monkeypatch.setattr(chat_module, "generate_answer", AsyncMock(return_value="Enterprise includes Support."))
+    import asyncio
+    result = asyncio.run(chat_module.chat_pipeline("What is included?", "tenant-a"))
+    assert any(item["source"] == "graph_relation" for item in result["citations"])
+    assert any(item["source"] == "ferretdb_memory" for item in result["citations"])
+    assert any(item["source"] == "ferretdb_document_memory" and item["document_id"] == "doc-m" for item in result["citations"])
 
 
 def test_chat_pipeline_does_not_silently_pick_a_side_on_conflict(monkeypatch):

@@ -3,14 +3,10 @@ setlocal EnableExtensions
 
 set "ROOT=%~dp0"
 set "PYTHON=%ROOT%follei_backend\indic_tts_venv\Scripts\python.exe"
-set "PORT=8002"
+set "PORT=8000"
 
-rem Local development service endpoints (override these in your environment if needed)
-set "DATABASE_URL=postgresql://username:password@localhost:55589/follei_main"
-set "REDIS_URL=redis://localhost:6379"
-set "QDRANT_URL=http://localhost:6333"
-set "KAFKA_BOOTSTRAP_SERVERS=localhost:9092"
-rem FerretDB settings and credentials are loaded from .env; do not override them here.
+rem Connection settings, credentials, and API keys are loaded from .env.
+rem Do not override them here: environment variables would take precedence over .env.
 
 cd /d "%ROOT%"
 echo.
@@ -27,6 +23,23 @@ if not exist "%PYTHON%" (
   exit /b 1
 )
 
+if exist "%ROOT%requirements.txt" (
+  echo [INFO] Installing/updating Python dependencies from requirements.txt...
+  "%PYTHON%" -m pip install -r "%ROOT%requirements.txt"
+  if errorlevel 1 (
+    echo [ERROR] Dependency installation failed. Follei was not started.
+    pause
+    exit /b 1
+  )
+)
+
+echo [INFO] Ensuring the bounded website crawler Chromium runtime exists...
+"%PYTHON%" -m playwright install chromium
+if errorlevel 1 (
+  echo [WARN] Playwright Chromium is unavailable. Server-rendered websites can still be ingested,
+  echo        but JavaScript-only websites will require this runtime.
+)
+
 set "COMPOSE_FILE="
 if exist "%ROOT%docker-compose.yml" set "COMPOSE_FILE=%ROOT%docker-compose.yml"
 if not defined COMPOSE_FILE if exist "%ROOT%follei_backend\follei\docker-compose.yml" set "COMPOSE_FILE=%ROOT%follei_backend\follei\docker-compose.yml"
@@ -34,7 +47,7 @@ if not defined COMPOSE_FILE if exist "%ROOT%follei_backend\follei\docker-compose
 if defined COMPOSE_FILE (
   echo [INFO] Starting Docker services from:
   echo        %COMPOSE_FILE%
-  docker compose -f "%COMPOSE_FILE%" up -d postgres redis qdrant ferretdb-postgres ferretdb zookeeper kafka
+  docker compose -p follei-backend-team -f "%COMPOSE_FILE%" up -d postgres redis qdrant minio ferretdb-postgres ferretdb zookeeper kafka
   if errorlevel 1 (
     echo [WARN] Docker Compose could not start all services.
     echo        Continuing so existing services can still be used.
@@ -49,6 +62,7 @@ call :check_port "FerretDB" 27017
 call :check_port "PostgreSQL" 55589
 call :check_port "Redis" 6379
 call :check_port "Kafka" 9092
+call :check_port "Object storage" 9000
 
 echo [INFO] Ensuring the local base database schema exists...
 "%PYTHON%" -m app.database.bootstrap
@@ -72,13 +86,20 @@ for /f "tokens=5" %%P in ('netstat -ano ^| findstr /R /C:":%PORT% .*LISTENING"')
 )
 :after_port_check
 
+call :require_port "Kafka" 9092
+if errorlevel 1 (
+  echo [ERROR] Kafka is required for queued indexing. Follei workers were not started.
+  pause
+  exit /b 1
+)
+
 echo [INFO] Starting Follei indexing worker...
 start "Follei Indexing Worker" /D "%ROOT%" "%PYTHON%" -m app.workers.indexing_consumer
 echo [INFO] Starting Follei knowledge sync worker...
 start "Follei Knowledge Sync Worker" /D "%ROOT%" "%PYTHON%" -m app.workers.knowledge_sync_consumer
 
 echo [INFO] Starting Follei API on port %PORT%...
-start "Follei API" /D "%ROOT%" "%PYTHON%" -m uvicorn app.main:app --reload
+start "Follei API" /D "%ROOT%" "%PYTHON%" -m uvicorn app.main:app --reload --port %PORT%
 
 timeout /t 3 /nobreak >nul
 call :check_url "Follei API" "http://localhost:%PORT%/health/"
@@ -117,3 +138,13 @@ if not errorlevel 1 (
 )
 exit /b 0
 
+:require_port
+set "CHECK_NAME=%~1"
+set "CHECK_PORT=%~2"
+for /l %%N in (1,1,20) do (
+  powershell -NoProfile -ExecutionPolicy Bypass -Command "if((Test-NetConnection localhost -Port %CHECK_PORT% -WarningAction SilentlyContinue).TcpTestSucceeded){exit 0}else{exit 1}" >nul 2>&1
+  if not errorlevel 1 exit /b 0
+  timeout /t 1 /nobreak >nul
+)
+echo [ERROR] %CHECK_NAME% port %CHECK_PORT% did not become reachable.
+exit /b 1

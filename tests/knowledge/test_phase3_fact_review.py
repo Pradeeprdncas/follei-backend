@@ -74,6 +74,41 @@ async def test_pricing_document_creates_cited_draft_without_publishing(monkeypat
     assert all(not getattr(value, "__tablename__", "").startswith("pricing_models") for value in db.added)
 
 
+@pytest.mark.asyncio
+async def test_deterministic_categories_supplement_partial_llm_result(monkeypatch):
+    tenant_id, document_id = uuid4(), uuid4()
+    policy_chunk = SimpleNamespace(
+        id=uuid4(), text="Refunds are available for 45 days.", page=1,
+        heading="Refund Policy", section_path=["Policies", "Refund Policy"],
+    )
+    plan_chunk = SimpleNamespace(
+        id=uuid4(), text="Enterprise Plan costs $30,000 and includes 100 seats.", page=2,
+        heading="Enterprise Plan Pricing", section_path=["Pricing", "Enterprise Plan"],
+    )
+
+    async def partial_llm(*args, **kwargs):
+        return [{
+            "fact_type": "policy",
+            "payload": {"title": "Refund Policy", "body": policy_chunk.text},
+            "chunk": policy_chunk,
+            "confidence": 0.9,
+        }]
+
+    monkeypatch.setattr(fact_extraction, "_llm_facts", partial_llm)
+    document = SimpleNamespace(
+        id=document_id, tenant_id=tenant_id, title="mixed.md", category="general",
+        source_uri="upload://mixed.md", version=1,
+    )
+    db = _DraftSession()
+
+    drafts = await fact_extraction.extract_document_facts(
+        db, document=document, chunks=[policy_chunk, plan_chunk]
+    )
+
+    assert {draft.fact_type for draft in drafts} >= {"policy", "pricing", "plan"}
+    assert len([draft for draft in drafts if draft.fact_type == "policy"]) == 1
+
+
 def test_approve_pricing_draft_publishes_record_with_immutable_citation_link():
     tenant_id = uuid4()
     draft = BusinessFactDraft(

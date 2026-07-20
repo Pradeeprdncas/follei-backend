@@ -1,0 +1,9 @@
+CALL TRANSCRIPT
+Date: 2026-07-20
+Participants: Maya (customer), Arun (Follei sales)
+
+Maya: We need an autonomous support and sales platform for a 120-person SaaS company.
+Arun: Follei can ground its workers in approved products, services, policies, and support procedures.
+Maya: Our main requirement is a two-hour response target for priority support.
+Arun: The Enterprise Support SLA provides a two-hour initial response target and 24/7 coverage.
+Maya: Please schedule a technical discovery meeting for next Tuesday.
