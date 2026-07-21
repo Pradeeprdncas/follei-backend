@@ -191,6 +191,52 @@ def tenant_snapshot(
         "products": "products", "services": "services", "pricing": "pricing_models",
         "policies": "policies", "plans": "business_plans", "slas": "slas",
     }
+    structured: dict[str, int] = {}
+    for label, table_name in structured_tables.items():
+        structured[label] = int(
+            db.execute(text(f"SELECT COUNT(*) FROM {table_name} WHERE tenant_id = :tenant_id"), {"tenant_id": tenant_id}).scalar() or 0
+        )
+
+    qdrant, qdrant_error = _qdrant_documents(tenant_id)
+    ferret, ferret_error = _ferret_documents(tenant_id)
+    rows = []
+    for document in documents:
+        document_id = str(document["id"])
+        vector = qdrant.get(document_id)
+        memory = ferret.get(document_id)
+        ready = document.get("status") in {"ready", "indexed", "completed"}
+        rows.append({
+            "document": {**document, "id": document_id},
+            "postgres": {"present": True, "chunk_count": document.get("chunk_count", 0)},
+            "qdrant": {"present": bool(vector), **(vector or {"point_count": 0, "approval_statuses": [], "source_types": [], "categories": []})},
+            "ferretdb": {"present": bool(memory), **(memory or {})},
+            "consistent": bool(ready and vector and memory),
+            "pending": not ready,
+        })
+
+    return {
+        "tenant_id": tenant_id,
+        "generated_at": datetime.utcnow().isoformat(),
+        "summary": {
+            "postgres_documents": len(documents),
+            "postgres_chunks": sum(int(row.get("chunk_count") or 0) for row in documents),
+            "qdrant_points": sum(int(row.get("point_count") or 0) for row in qdrant.values()),
+            "ferretdb_documents": len(ferret),
+            "ready_in_all_three": sum(1 for row in rows if row["consistent"]),
+            "job_statuses": dict(Counter(str(job["status"]) for job in jobs)),
+            "structured": structured,
+            "graph_edges": len(graph),
+        },
+        "documents": rows,
+        "jobs": jobs,
+        "graph": graph,
+        "store_errors": {"qdrant": qdrant_error, "ferretdb": ferret_error},
+        "store_roles": {
+            "postgres": "Canonical documents, chunks, approved structured facts, and graph",
+            "qdrant": "Semantic vectors for approved tenant-scoped retrieval",
+            "ferretdb": "Clean long-term document and conversation memory projections",
+        },
+    }
 
 
 @router.get("/ui/tenant/store-content")
@@ -307,52 +353,6 @@ def tenant_store_content(
         },
         "qdrant": {"points": qdrant_records, "vectors_included": False, "error": qdrant_error},
         "ferretdb": {"records": ferret_records, "error": ferret_error},
-    }
-    structured: dict[str, int] = {}
-    for label, table_name in structured_tables.items():
-        structured[label] = int(
-            db.execute(text(f"SELECT COUNT(*) FROM {table_name} WHERE tenant_id = :tenant_id"), {"tenant_id": tenant_id}).scalar() or 0
-        )
-
-    qdrant, qdrant_error = _qdrant_documents(tenant_id)
-    ferret, ferret_error = _ferret_documents(tenant_id)
-    rows = []
-    for document in documents:
-        document_id = str(document["id"])
-        vector = qdrant.get(document_id)
-        memory = ferret.get(document_id)
-        ready = document.get("status") in {"ready", "indexed", "completed"}
-        rows.append({
-            "document": {**document, "id": document_id},
-            "postgres": {"present": True, "chunk_count": document.get("chunk_count", 0)},
-            "qdrant": {"present": bool(vector), **(vector or {"point_count": 0, "approval_statuses": [], "source_types": [], "categories": []})},
-            "ferretdb": {"present": bool(memory), **(memory or {})},
-            "consistent": bool(ready and vector and memory),
-            "pending": not ready,
-        })
-
-    return {
-        "tenant_id": tenant_id,
-        "generated_at": datetime.utcnow().isoformat(),
-        "summary": {
-            "postgres_documents": len(documents),
-            "postgres_chunks": sum(int(row.get("chunk_count") or 0) for row in documents),
-            "qdrant_points": sum(int(row.get("point_count") or 0) for row in qdrant.values()),
-            "ferretdb_documents": len(ferret),
-            "ready_in_all_three": sum(1 for row in rows if row["consistent"]),
-            "job_statuses": dict(Counter(str(job["status"]) for job in jobs)),
-            "structured": structured,
-            "graph_edges": len(graph),
-        },
-        "documents": rows,
-        "jobs": jobs,
-        "graph": graph,
-        "store_errors": {"qdrant": qdrant_error, "ferretdb": ferret_error},
-        "store_roles": {
-            "postgres": "Canonical documents, chunks, approved structured facts, and graph",
-            "qdrant": "Semantic vectors for approved tenant-scoped retrieval",
-            "ferretdb": "Clean long-term document and conversation memory projections",
-        },
     }
 
 

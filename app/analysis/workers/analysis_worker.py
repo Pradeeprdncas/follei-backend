@@ -10,6 +10,7 @@ import json
 import signal
 import sys
 import platform
+import time
 
 # ── Model registration (must precede any service that touches the DB) ──────
 # ConversationAnalysis.relationship("Conversation") requires Conversation to
@@ -53,17 +54,28 @@ class AnalysisWorker:
         self.running = False
 
     def run(self):
-        """Main consumer loop."""
+        """Main consumer loop.
+
+        kafka-python occasionally tears down a broker connection (idle
+        timeout, broker restart) and leaves a closed socket (fd=-1) behind;
+        the next poll() then raises ValueError("Invalid file descriptor: -1")
+        instead of a Kafka-specific error, which used to bubble out of the
+        single poll loop below and kill the whole worker process after one
+        transient hiccup. Recreating the consumer and retrying keeps the
+        worker alive across that instead of requiring a manual restart.
+        """
         ensure_topics()
-        consumer = get_consumer(
-            _settings.KAFKA_TOPIC_DOMAIN_EVENTS,
-            _settings.KAFKA_CONSUMER_GROUP_ANALYSIS,
-        )
-
         logger.info("Analysis worker started — waiting for events...")
+        consumer = None
 
-        try:
-            while self.running:
+        while self.running:
+            try:
+                if consumer is None:
+                    consumer = get_consumer(
+                        _settings.KAFKA_TOPIC_DOMAIN_EVENTS,
+                        _settings.KAFKA_CONSUMER_GROUP_ANALYSIS,
+                    )
+
                 records = consumer.poll(timeout_ms=1000)
                 if not records:
                     continue
@@ -74,13 +86,23 @@ class AnalysisWorker:
                             break
                         self._process_message(message)
 
-        except KeyboardInterrupt:
-            logger.info("Keyboard interrupt — shutting down")
-        except Exception as e:
-            logger.exception(f"Worker error: {e}")
-        finally:
+            except KeyboardInterrupt:
+                logger.info("Keyboard interrupt — shutting down")
+                break
+            except Exception as e:
+                logger.warning(f"Kafka consumer error, reconnecting: {e}")
+                try:
+                    if consumer is not None:
+                        consumer.close()
+                except Exception:
+                    pass
+                consumer = None
+                if self.running:
+                    time.sleep(2)
+
+        if consumer is not None:
             consumer.close()
-            logger.info("Analysis worker stopped")
+        logger.info("Analysis worker stopped")
 
     def _process_message(self, message) -> None:
         """Process a single Kafka message."""

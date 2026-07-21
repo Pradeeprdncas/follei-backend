@@ -21,13 +21,16 @@ class EmotionFusionService:
         voice_probabilities: dict[str, float] | None = None,
         text_probabilities: dict[str, float] | None = None,
     ) -> EmotionFusionResult:
+        """Adapts this service's (voice, text) naming to the engine's
+        (text_sentiment, voice_emotion) signature. voice/text_probabilities
+        aren't part of the engine's weighting algorithm — accepted here only
+        so callers that already compute them don't need special-casing.
+        """
         if cls.engine is None:
             cls.initialize()
         return cls.engine.fuse(
+            text_sentiment=text_emotion,
+            text_confidence=text_confidence,
             voice_emotion=voice_emotion,
             voice_confidence=voice_confidence,
-            text_emotion=text_emotion,
-            text_confidence=text_confidence,
-            voice_probabilities=voice_probabilities,
-            text_probabilities=text_probabilities,
         )

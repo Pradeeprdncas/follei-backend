@@ -76,3 +76,4 @@ peft
 soundfile
 librosa
 noisereduce
+gTTS

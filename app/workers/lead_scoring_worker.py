@@ -9,6 +9,7 @@ the rest of the app (routers, other workers) can read a lead's latest state
 without re-deriving it from raw conversation analyses.
 """
 import json
+import time
 import uuid
 from datetime import datetime
 
@@ -35,20 +36,47 @@ class LeadScoringWorker:
         self.event_publisher = DomainEventPublisher(source="lead_scoring.worker")
 
     def run(self):
+        """Main consumer loop.
+
+        kafka-python occasionally tears down a broker connection (idle
+        timeout, broker restart) and leaves a closed socket (fd=-1) behind;
+        the next poll() then raises ValueError("Invalid file descriptor: -1")
+        instead of a Kafka-specific error. Recreating the consumer on any
+        error keeps the worker alive across that instead of crashing the
+        whole process (see app/analysis/workers/analysis_worker.py for the
+        same fix).
+        """
         ensure_topics()
-        consumer = get_consumer(_settings.KAFKA_TOPIC_DOMAIN_EVENTS, "follei-lead-scoring-group")
         logger.info("Lead scoring worker started")
-        try:
-            while self.running:
+        consumer = None
+
+        while self.running:
+            try:
+                if consumer is None:
+                    consumer = get_consumer(_settings.KAFKA_TOPIC_DOMAIN_EVENTS, "follei-lead-scoring-group")
+
                 records = consumer.poll(timeout_ms=1000)
                 if not records:
                     continue
                 for tp, msgs in records.items():
                     for msg in msgs:
                         self._process(msg)
-        except KeyboardInterrupt:
-            logger.info("Shutting down lead scoring worker")
-        finally:
+
+            except KeyboardInterrupt:
+                logger.info("Shutting down lead scoring worker")
+                break
+            except Exception as e:
+                logger.warning(f"Kafka consumer error, reconnecting: {e}")
+                try:
+                    if consumer is not None:
+                        consumer.close()
+                except Exception:
+                    pass
+                consumer = None
+                if self.running:
+                    time.sleep(2)
+
+        if consumer is not None:
             consumer.close()
 
     def _process(self, message) -> None:

@@ -104,7 +104,7 @@ echo.
 echo Tenant console: http://127.0.0.1:%PORT%/tenant
 echo Voice console:  http://127.0.0.1:%PORT%/user
 echo API docs:       http://127.0.0.1:%PORT%/docs
-echo Worker output:  visible, separately titled terminal windows
+echo Worker output:  visible in Windows Terminal tabs
 echo Runtime state:  %ROOT%logs\runtime
 echo.
 if "%NO_PAUSE%"=="0" pause
@@ -115,7 +115,7 @@ exit /b 0
 echo.
 echo ==========================================================
 echo [FAILED] Follei did not start completely.
-echo Review the error above and the separately titled worker terminals.
+echo Review the error above and the Windows Terminal tabs.
 echo ==========================================================
 if "%NO_PAUSE%"=="0" pause
 endlocal

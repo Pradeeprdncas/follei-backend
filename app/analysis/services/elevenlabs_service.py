@@ -21,6 +21,34 @@ class ElevenLabsService:
         return bool(_settings.ELEVENLABS_API_KEY.strip())
 
     @classmethod
+    def _gtts_fallback(
+        cls,
+        text: str,
+        destination: Path,
+        language: str = "en",
+    ) -> dict[str, Any]:
+        """Free gTTS fallback when ElevenLabs is unavailable."""
+        from gtts import gTTS
+
+        _LANG_MAP = {
+            "en": "en", "ta": "ta", "hi": "hi", "es": "es", "fr": "fr",
+            "de": "de", "it": "it", "pt": "pt", "ja": "ja", "ko": "ko",
+            "zh": "zh", "ar": "ar", "ru": "ru", "nl": "nl",
+        }
+        tts_lang = _LANG_MAP.get(language, "en")
+        tts = gTTS(text=text, lang=tts_lang)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        tts.save(str(destination))
+        return {
+            "engine": "gtts_fallback",
+            "status": "ok",
+            "language": tts_lang,
+            "model": "gtts",
+            "voice_id": "google-default",
+            "audio_path": str(destination),
+        }
+
+    @classmethod
     def transcribe(cls, audio: np.ndarray, sample_rate: int = 16000) -> dict[str, Any]:
         if not cls.configured():
             raise RuntimeError("ELEVENLABS_API_KEY is not configured")
@@ -60,7 +88,7 @@ class ElevenLabsService:
         voice_id: str | None = None,
     ) -> dict[str, Any]:
         if not cls.configured():
-            raise RuntimeError("ELEVENLABS_API_KEY is not configured")
+            return cls._gtts_fallback(text, destination, language)
         destination.parent.mkdir(parents=True, exist_ok=True)
         selected_voice_id = voice_id or _settings.ELEVENLABS_VOICE_ID
         url = f"{cls.BASE_URL}/text-to-speech/{selected_voice_id}"
@@ -69,15 +97,35 @@ class ElevenLabsService:
             "model_id": _settings.ELEVENLABS_TTS_MODEL,
         }
         params = {"output_format": _settings.ELEVENLABS_OUTPUT_FORMAT}
-        with httpx.Client(timeout=_settings.ELEVENLABS_TIMEOUT_SECONDS) as client:
-            response = client.post(
-                url,
-                params=params,
-                headers={"xi-api-key": _settings.ELEVENLABS_API_KEY, "Content-Type": "application/json"},
-                json=body,
+        try:
+            with httpx.Client(timeout=_settings.ELEVENLABS_TIMEOUT_SECONDS) as client:
+                response = client.post(
+                    url,
+                    params=params,
+                    headers={"xi-api-key": _settings.ELEVENLABS_API_KEY, "Content-Type": "application/json"},
+                    json=body,
+                )
+                if response.status_code in (401, 403, 429):
+                    from loguru import logger
+                    logger.warning(
+                        "ElevenLabs TTS returned status={}, falling back to gTTS",
+                        response.status_code,
+                    )
+                    return cls._gtts_fallback(text, destination, language)
+                response.raise_for_status()
+                destination.write_bytes(response.content)
+        except httpx.HTTPStatusError as exc:
+            from loguru import logger
+            logger.warning(
+                "ElevenLabs TTS HTTP error {}, falling back to gTTS: {}",
+                exc.response.status_code,
+                exc,
             )
-            response.raise_for_status()
-            destination.write_bytes(response.content)
+            return cls._gtts_fallback(text, destination, language)
+        except Exception as exc:
+            from loguru import logger
+            logger.warning("ElevenLabs TTS failed, falling back to gTTS: {}", exc)
+            return cls._gtts_fallback(text, destination, language)
         return {
             "engine": "elevenlabs",
             "status": "ok",
