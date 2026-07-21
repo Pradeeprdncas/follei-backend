@@ -87,7 +87,7 @@ class ElevenLabsService:
         language: str = "en",
         voice_id: str | None = None,
     ) -> dict[str, Any]:
-        if not cls.configured():
+        if not cls.configured() or _settings.TTS_SKIP_ELEVENLABS:
             return cls._gtts_fallback(text, destination, language)
         destination.parent.mkdir(parents=True, exist_ok=True)
         selected_voice_id = voice_id or _settings.ELEVENLABS_VOICE_ID

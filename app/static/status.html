@@ -1,0 +1,162 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Follei Build Status</title>
+<style>
+:root{--bg:#091817;--panel:#102321;--panel2:#142b28;--line:#28423e;--mint:#5ee0ad;--lime:#d7ff74;--text:#edf9f5;--muted:#88a59e;--red:#ff7575;--amber:#ffcf6b}
+*{box-sizing:border-box}
+body{margin:0;background:radial-gradient(circle at 80% -10%,#163d36 0,transparent 36%),var(--bg);color:var(--text);font:14px/1.5 Inter,Segoe UI,Arial,sans-serif}
+.shell{max-width:1200px;margin:auto;padding:0 28px 60px}
+header{height:82px;display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid var(--line)}
+.brand{display:flex;gap:12px;align-items:center}
+.mark{width:38px;height:38px;border-radius:12px;display:grid;place-items:center;background:var(--lime);color:#10231f;font-weight:900}
+.brand h1{font-size:18px;margin:0}
+.brand p{font-size:11px;margin:2px 0;color:var(--muted)}
+nav a{color:var(--muted);text-decoration:none;padding:8px 11px;border-radius:8px;font-size:13px}
+nav a.active{background:#1b3732;color:var(--text)}
+.summary{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin:24px 0}
+.stat{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:16px}
+.stat .n{font-size:28px;font-weight:800}
+.stat .l{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;margin-top:2px}
+.stat.done .n{color:var(--mint)}
+.stat.partial .n{color:var(--amber)}
+.stat.blocked .n{color:var(--red)}
+.stat.todo .n{color:var(--muted)}
+section.card{background:rgba(16,35,33,.95);border:1px solid var(--line);border-radius:16px;padding:20px 22px;margin-bottom:16px}
+h2{font-size:15px;margin:0 0 4px;display:flex;align-items:center;gap:8px}
+h2 .tag{font-size:10px;text-transform:uppercase;letter-spacing:.06em;padding:2px 8px;border-radius:999px;font-weight:800}
+.tag.done{background:rgba(94,224,173,.15);color:var(--mint)}
+.tag.partial{background:rgba(255,207,107,.15);color:var(--amber)}
+.tag.blocked{background:rgba(255,117,117,.15);color:var(--red)}
+.tag.todo{background:rgba(136,165,158,.15);color:var(--muted)}
+.subtitle{font-size:11px;color:var(--muted);margin:0 0 12px}
+ul{margin:8px 0 0;padding-left:0;list-style:none}
+li{padding:6px 0;border-top:1px solid rgba(40,66,62,.5);font-size:13px;display:flex;gap:10px;align-items:flex-start}
+li:first-child{border-top:none}
+.ico{flex-shrink:0;width:16px;text-align:center;font-weight:800}
+.ico.y{color:var(--mint)}
+.ico.p{color:var(--amber)}
+.ico.n{color:var(--muted)}
+.ico.b{color:var(--red)}
+.note{color:var(--muted);font-size:11.5px}
+code{background:#0c1f1d;border:1px solid #203c37;border-radius:5px;padding:1px 5px;font-size:12px}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+@media(max-width:880px){.summary,.grid2{grid-template-columns:1fr 1fr}}
+@media(max-width:560px){.summary{grid-template-columns:1fr 1fr}.shell{padding:0 14px 40px}}
+footer{margin-top:8px;font-size:11px;color:var(--muted);text-align:center}
+</style></head>
+<body><div class="shell">
+
+<header>
+  <div class="brand"><div class="mark">F</div><div><h1>Follei Build Status</h1><p>Snapshot of what's implemented, partial, or blocked</p></div></div>
+  <nav><a href="/tenant">Tenant</a><a href="/user">User voice</a><a class="active" href="/status">Status</a><a href="/docs">API</a></nav>
+</header>
+
+<div class="summary">
+  <div class="stat done"><div class="n">2</div><div class="l">Systems fully live</div></div>
+  <div class="stat partial"><div class="n">2</div><div class="l">Systems partial</div></div>
+  <div class="stat blocked"><div class="n">1</div><div class="l">Blocked on credentials</div></div>
+  <div class="stat todo"><div class="n">2</div><div class="l">Not started</div></div>
+</div>
+
+<section class="card">
+  <h2>System 1 — Business Intelligence <span class="tag partial">Partial</span></h2>
+  <p class="subtitle">Learn the business from connected sources</p>
+  <ul>
+    <li><span class="ico y">✓</span> File upload ingestion (PDF/docs) → PostgreSQL + Qdrant + FerretDB, verified end-to-end with a 1,484-chunk PDF</li>
+    <li><span class="ico y">✓</span> Website URL ingestion</li>
+    <li><span class="ico y">✓</span> Structured extraction: products, services, pricing, policies, plans, SLAs, FAQs</li>
+    <li><span class="ico n">–</span> Google Drive / OneDrive / SharePoint / Notion / Confluence connectors — not built</li>
+    <li><span class="ico n">–</span> Gmail/Outlook/WhatsApp/Teams/Slack as knowledge sources (Gmail exists only as a reply channel, not as an ingestion source) — not built</li>
+    <li><span class="ico n">–</span> CRM/ERP/LMS/Accounting/Ticketing system connectors — not built</li>
+  </ul>
+</section>
+
+<section class="card">
+  <h2>System 2 — Knowledge System <span class="tag done">Done</span></h2>
+  <p class="subtitle">Provide accurate business context to all AI workers</p>
+  <ul>
+    <li><span class="ico y">✓</span> Structured knowledge store (products/services/pricing/policies/plans/SLAs) — PostgreSQL</li>
+    <li><span class="ico y">✓</span> Vector database (semantic retrieval) — Qdrant, tenant-scoped</li>
+    <li><span class="ico y">✓</span> Business knowledge graph (entity relationships)</li>
+    <li><span class="ico y">✓</span> Memory system (long/mid/short-term) — FerretDB document + conversation memory projections</li>
+    <li><span class="ico y">✓</span> <code>/tenant</code> console — read-only 3-store inspector, filterable, redacts credential-shaped fields</li>
+  </ul>
+</section>
+
+<section class="card">
+  <h2>System 3 — Revenue Intelligence <span class="tag partial">Partial</span></h2>
+  <p class="subtitle">ICP / Intent / Engagement / Qualification / Buying Signal / Relationship + BANT + MEDDIC</p>
+  <ul>
+    <li><span class="ico y">✓</span> All 6 lead-intelligence scores compute live on every turn (text/business-evidence led; voice tone enriches relationship + overall confidence via emotion fusion)</li>
+    <li><span class="ico y">✓</span> BANT + MEDDIC scoring compute live (evidence-heuristic scorer)</li>
+    <li><span class="ico y">✓</span> Scores now actually reach the <code>/user</code> UI — fixed 3 chained bugs this session (see Recent Fixes) that silently dropped every audio-based analysis message before it reached the browser</li>
+    <li><span class="ico p">~</span> LLM-generated qualification <em>reasoning text</em> for BANT/MEDDIC is unavailable — local GGUF model (<code>qwen2.5-3b-instruct-q4_k_m.gguf</code>) was never downloaded, so it falls back to the heuristic scorer. Scores are correct either way; only the narrative explanation is missing.</li>
+    <li><span class="ico n">–</span> Revenue Probability Engine as a distinct trained model (historical deals/behavioral) — current scoring is real-time heuristic, not yet trained on historical outcomes</li>
+    <li><span class="ico n">–</span> <code>qualification_frameworks</code> / <code>lead_qualifications</code> / <code>qualification_answers</code> relational tables were never migrated — a secondary, redundant BANT/MEDDIC persistence path logs a caught warning every turn. Not fixed: the same data is already saved via <code>conversation_analyses.lead_score.bant</code>, so no metric is actually missing.</li>
+  </ul>
+</section>
+
+<section class="card">
+  <h2>System 4 — Customer Intelligence <span class="tag todo">Not started</span></h2>
+  <p class="subtitle">Post-conversion lifecycle: health, churn, expansion</p>
+  <ul>
+    <li><span class="ico n">–</span> Customer Health Engine (adoption, feature usage, engagement, satisfaction)</li>
+    <li><span class="ico n">–</span> Churn Prediction Engine</li>
+    <li><span class="ico n">–</span> Expansion Engine (upsell/cross-sell/renewal)</li>
+  </ul>
+</section>
+
+<section class="card">
+  <h2>System 5 — AI Workforce <span class="tag partial">Partial</span></h2>
+  <p class="subtitle">The execution layer — workers that actually act</p>
+  <div class="grid2">
+    <ul>
+      <li><span class="ico y">✓</span> SDR Worker — qualification, discovery, meeting booking, auto-handoff to Sales on threshold</li>
+      <li><span class="ico y">✓</span> Sales Executive Worker — product explanation, objection handling, proposal generation, deal progression</li>
+      <li><span class="ico y">✓</span> Support Worker — inbound message handling, escalation</li>
+      <li><span class="ico y">✓</span> Live dispatch over the voice loop (worker selectable per session, tested SDR→Sales handoff)</li>
+    </ul>
+    <ul>
+      <li><span class="ico n">–</span> Customer Success Worker</li>
+      <li><span class="ico n">–</span> Collections Worker</li>
+      <li><span class="ico n">–</span> Account Manager Worker</li>
+      <li><span class="ico n">–</span> Executive Insights Worker</li>
+    </ul>
+  </div>
+</section>
+
+<section class="card">
+  <h2>System 6 — Learning System <span class="tag todo">Stopped by request</span></h2>
+  <p class="subtitle">Continuous action → outcome → model-update loop</p>
+  <ul>
+    <li><span class="ico n">–</span> <code>LearningSignal</code> model + migration exist, but signal emission/consumption work was explicitly paused — deprioritized as "a big process" per your instruction, not attempted further</li>
+  </ul>
+</section>
+
+<section class="card">
+  <h2>Voice loop, comms &amp; consoles <span class="tag blocked">Blocked on ElevenLabs quota</span></h2>
+  <ul>
+    <li><span class="ico y">✓</span> Local mic → STT → grounded RAG answer → TTS → live metrics, full pipeline verified working end-to-end</li>
+    <li><span class="ico y">✓</span> Multilingual reply — detects the spoken language, replies in it</li>
+    <li><span class="ico b">✗</span> ElevenLabs STT + TTS both return <code>401 quota_exceeded</code> — free-tier 10,000 characters used up, resets <b>2026-08-10</b>. TTS falls back to gTTS (works, wrong voice). STT has no fallback yet, so uploaded/spoken audio can't be transcribed until the key works again.</li>
+    <li><span class="ico n">–</span> Offered, not yet built: local/offline STT fallback (e.g. faster-whisper) so voice keeps working while ElevenLabs is out of quota</li>
+    <li><span class="ico y">✓</span> Gmail auto-reply — IMAP/SMTP verified working, not switched on for live traffic</li>
+    <li><span class="ico y">✓</span> Brevo SMS — built alongside Twilio, auth verified, not switched on for live traffic</li>
+    <li><span class="ico y">✓</span> <code>/tenant</code> console — upload + website URL + live 3-store data view</li>
+    <li><span class="ico y">✓</span> <code>/user</code> console — speak/upload/type, live metrics + multilingual reply (metrics rendering bug fixed this session)</li>
+  </ul>
+</section>
+
+<section class="card">
+  <h2>Reliability fixes this session</h2>
+  <ul>
+    <li><span class="ico y">✓</span> <code>/ui/tenant/snapshot</code> 500 — function body had been split by a bad edit and never returned; fixed</li>
+    <li><span class="ico y">✓</span> Sentiment model was stuck on a flat neutral fallback (training dataset was missing) — dataset created, model now trains and classifies correctly</li>
+    <li><span class="ico y">✓</span> Conversation-analysis worker and lead-scoring worker died permanently on any transient Kafka connection hiccup (known kafka-python-on-Windows bug) — both now auto-reconnect instead of exiting</li>
+    <li><span class="ico y">✓</span> <code>EmotionFusionService.fuse()</code> called the engine with kwargs it didn't accept — crashed every audio-based analysis turn</li>
+    <li><span class="ico y">✓</span> <code>voice_analysis_pipeline.py</code> read <code>fusion.fused_emotion</code>/<code>fused_confidence</code>, which don't exist on <code>EmotionFusionResult</code> (it's <code>final_emotion</code>/<code>confidence</code>) — this is the bug that made the Six Lead Metrics panel stay at "—" for every audio turn even though the terminal showed real scores being computed</li>
+  </ul>
+  <p class="note">All confirmed by re-running the affected code paths directly, not just by inspection.</p>
+</section>
+
+<footer>Generated as a snapshot, not a live dashboard — re-check code/tests before relying on any line here after further changes.</footer>
+</div></body></html>

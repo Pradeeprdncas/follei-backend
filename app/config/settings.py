@@ -139,6 +139,12 @@ class Settings(BaseSettings):
     ELEVENLABS_OUTPUT_FORMAT: str = "mp3_44100_128"
     ELEVENLABS_TIMEOUT_SECONDS: int = 60
     ELEVENLABS_FALLBACK_ENABLED: bool = True
+    # Default True for now: the configured ElevenLabs key is out of free-tier
+    # quota (0/10000 credits, resets 2026-08-10), so every TTS call was paying
+    # a real ~0.5-1s network round trip to a call that always 401s before
+    # falling back to gTTS anyway. Flip to False once the key has quota again
+    # to resume trying ElevenLabs first for its higher-quality voices.
+    TTS_SKIP_ELEVENLABS: bool = True
 
     # -- Brevo email (transactional send + inbound auto-reply) --
     BREVO_API_KEY: str = Field(default="")

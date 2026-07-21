@@ -25,6 +25,34 @@ router = APIRouter()
 publisher = DomainEventPublisher(source="websocket")
 _SPOKEN_SOURCE_RE = re.compile(r"\[Source:[^\]]+\]", re.IGNORECASE)
 
+# Markdown formatting characters that only make sense on a screen -- TTS has
+# no way to "read" bold/bullets/code-fences, so they either get spoken
+# literally (e.g. "asterisk asterisk") or, worse, a lone "1." on its own line
+# gets mistaken by the sentence splitter below for a whole sentence and is
+# spoken/shown as a stray "1." bubble. Meaningful characters (+, %, currency
+# symbols, digits) are left untouched since they carry real spoken content.
+_MD_CODE_FENCE_RE = re.compile(r"```[a-zA-Z]*\n?|```")
+_MD_INLINE_CODE_RE = re.compile(r"`([^`]*)`")
+_MD_HEADER_RE = re.compile(r"^\s{0,3}#{1,6}\s+", re.MULTILINE)
+_MD_HR_RE = re.compile(r"^\s*([-*_])(?:\s*\1){2,}\s*$", re.MULTILINE)
+_MD_ORDERED_LIST_RE = re.compile(r"^\s*\d+[.)]\s+", re.MULTILINE)
+_MD_BULLET_RE = re.compile(r"^\s*[-*•]\s+", re.MULTILINE)
+_MD_EMPHASIS_RE = re.compile(r"(\*\*\*|\*\*|\*|___|__|_)")
+
+
+def _strip_markdown_for_speech(text: str) -> str:
+    """Plain-text version of an LLM answer, safe to both speak and display as a turn."""
+    text = _MD_CODE_FENCE_RE.sub("", text)
+    text = _MD_INLINE_CODE_RE.sub(r"\1", text)
+    text = _MD_HR_RE.sub("", text)
+    text = _MD_HEADER_RE.sub("", text)
+    text = _MD_ORDERED_LIST_RE.sub("", text)
+    text = _MD_BULLET_RE.sub("", text)
+    text = _MD_EMPHASIS_RE.sub("", text)
+    text = re.sub(r"\n{2,}", ". ", text)
+    text = re.sub(r"[ \t]+", " ", text)
+    return text.strip()
+
 
 class ConnectionManager:
     """Manages WebSocket connections grouped by conversation."""
@@ -382,7 +410,7 @@ async def _trigger_voice_analysis(
     # answer has been spoken so it can never increase call-answer latency.
     def start_background_bant() -> None:
         analysis_task = asyncio.create_task(
-            _run_analysis_and_notify(transcript, conversation_id, tenant_id, ws, audio=audio)
+            _run_analysis_and_notify(transcript, conversation_id, tenant_id, ws, audio=audio, lead_id=lead_id)
         )
 
         def _log_background_analysis(task: asyncio.Task) -> None:
@@ -573,6 +601,8 @@ async def _speak_answer(
     import time as _time
     import re as _re
 
+    text = _strip_markdown_for_speech(text)
+
     # Simple sentence splitter: ., !, ?, newline, or clause break after max_sentence_len
     sentence_end = _re.compile(r"(?<=[.!?])\s+|(?<=\n)\s*")
     # Fallback: split on mid-sentence clause breaks if a sentence is too long
@@ -615,6 +645,7 @@ async def _run_analysis_and_notify(
     tenant_id: str,
     ws: WebSocket,
     audio=None,
+    lead_id: str | None = None,
 ):
     """Run BANT/MEDDIC analysis in background; send WS update, then persist + publish.
 
@@ -641,6 +672,7 @@ async def _run_analysis_and_notify(
             audio=audio,
             conversation_id=conversation_id,
             tenant_id=tenant_id,
+            lead_id=lead_id,
         )
         logger.info("=== VOICE_TRACE analysis_complete raw={}", analysis_result)
         await manager.send_to(ws, {

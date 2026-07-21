@@ -12,8 +12,9 @@ from pathlib import Path
 from typing import Any
 from uuid import UUID, uuid4
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Body, Depends, HTTPException, Query
 from fastapi.responses import FileResponse
+from pydantic import BaseModel
 from qdrant_client.models import FieldCondition, Filter, MatchValue
 from sqlalchemy import text
 from sqlalchemy.orm import Session
@@ -27,6 +28,7 @@ from app.core.security import get_authenticated_tenant_id
 from app.models.conversations.conversation import Conversation
 from app.models.leads.lead import Lead
 from app.models.tenancy import User
+from app.services.knowledge.context_store import get_context
 
 router = APIRouter(tags=["System verification UI"])
 _STATIC = Path(__file__).resolve().parent.parent / "static"
@@ -70,6 +72,11 @@ def tenant_console() -> FileResponse:
 @router.get("/user", include_in_schema=False)
 def user_console() -> FileResponse:
     return FileResponse(_STATIC / "user_console.html")
+
+
+@router.get("/status", include_in_schema=False)
+def status_console() -> FileResponse:
+    return FileResponse(_STATIC / "status.html")
 
 
 def _qdrant_documents(tenant_id: str) -> tuple[dict[str, dict[str, Any]], str | None]:
@@ -190,11 +197,27 @@ def tenant_snapshot(
     structured_tables = {
         "products": "products", "services": "services", "pricing": "pricing_models",
         "policies": "policies", "plans": "business_plans", "slas": "slas",
+        "faqs": "faqs", "competitors": "competitors", "customer_segments": "customer_segments",
     }
     structured: dict[str, int] = {}
     for label, table_name in structured_tables.items():
         structured[label] = int(
             db.execute(text(f"SELECT COUNT(*) FROM {table_name} WHERE tenant_id = :tenant_id"), {"tenant_id": tenant_id}).scalar() or 0
+        )
+    # Sales/support/payment processes share one table (Procedure), distinguished
+    # by metadata_->>'process_type' (see fact_publishing.py) rather than three
+    # separate tables — count each slice explicitly so they show up as their
+    # own System-1 categories instead of being invisible inside "procedures".
+    for process_type, label in (
+        ("sales_process", "sales_processes"),
+        ("support_process", "support_processes"),
+        ("payment_process", "payment_processes"),
+    ):
+        structured[label] = int(
+            db.execute(
+                text("SELECT COUNT(*) FROM procedures WHERE tenant_id = :tenant_id AND metadata->>'process_type' = :process_type"),
+                {"tenant_id": tenant_id, "process_type": process_type},
+            ).scalar() or 0
         )
 
     qdrant, qdrant_error = _qdrant_documents(tenant_id)
@@ -279,6 +302,7 @@ def tenant_store_content(
         for label, table_name in {
             "product": "products", "service": "services", "pricing": "pricing_models",
             "policy": "policies", "plan": "business_plans", "sla": "slas",
+            "faq": "faqs", "competitor": "competitors", "customer_segment": "customer_segments",
         }.items():
             records = db.execute(
                 text(
@@ -287,6 +311,25 @@ def tenant_store_content(
                     "ORDER BY id LIMIT 5"
                 ),
                 {"tenant_id": tenant_id},
+            ).mappings()
+            structured_facts.extend(
+                {"record_type": label, "id": row["id"], "record": _safe_store_value(row["record"])}
+                for row in records
+            )
+        # Sales/support/payment processes all live in one Procedure table,
+        # distinguished by metadata_->>'process_type' -- see fact_publishing.py.
+        for process_type, label in (
+            ("sales_process", "sales_process"),
+            ("support_process", "support_process"),
+            ("payment_process", "payment_process"),
+        ):
+            records = db.execute(
+                text(
+                    "SELECT id::text AS id, to_jsonb(row_data) - 'tenant_id' AS record "
+                    "FROM procedures row_data WHERE tenant_id = CAST(:tenant_id AS uuid) "
+                    "AND metadata->>'process_type' = :process_type ORDER BY id LIMIT 5"
+                ),
+                {"tenant_id": tenant_id, "process_type": process_type},
             ).mappings()
             structured_facts.extend(
                 {"record_type": label, "id": row["id"], "record": _safe_store_value(row["record"])}
@@ -356,20 +399,140 @@ def tenant_store_content(
     }
 
 
+@router.get("/ui/tenant/leads")
+def tenant_leads(
+    limit: int = Query(default=100, ge=1, le=200),
+    tenant_id: str = Depends(get_authenticated_tenant_id),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """List this tenant's leads, newest-analyzed first, for the /tenant console's per-lead verification view."""
+    leads = (
+        db.query(Lead)
+        .filter(Lead.tenant_id == tenant_id)
+        .order_by(Lead.last_analysis_at.desc().nullslast(), Lead.created_at.desc())
+        .limit(limit)
+        .all()
+    )
+    return {
+        "tenant_id": tenant_id,
+        "leads": [
+            {
+                "id": str(lead.id),
+                "public_id": lead.public_id,
+                "email": lead.email,
+                "name": " ".join(filter(None, [lead.first_name, lead.last_name])) or None,
+                "company": lead.company,
+                "status": lead.status,
+                "current_score": lead.current_score,
+                "current_temperature": lead.current_temperature,
+                "last_analysis_at": _iso(lead.last_analysis_at),
+                "created_at": _iso(lead.created_at),
+            }
+            for lead in leads
+        ],
+    }
+
+
+@router.get("/ui/tenant/leads/{lead_id}")
+def tenant_lead_detail(
+    lead_id: UUID,
+    tenant_id: str = Depends(get_authenticated_tenant_id),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Everything Follei knows about one lead, for per-lead verification.
+
+    Combines the Postgres Lead row, their recent conversations, and their
+    FerretDB qualification memory (BANT/MEDDIC/history) -- the same
+    tenant_context document build_agent_context() feeds into chat_pipeline()
+    to tailor replies, so this is a direct way to see what a reply for this
+    lead is actually being generated with.
+    """
+    lead = db.query(Lead).filter(Lead.id == str(lead_id), Lead.tenant_id == tenant_id).first()
+    if not lead:
+        raise HTTPException(status_code=404, detail="Lead not found for this tenant")
+
+    conversations = _mapping_rows(
+        db.execute(
+            text(
+                """
+                SELECT id, public_id, title, channel, status, message_count,
+                       current_lead_temperature, started_at, last_activity_at
+                FROM conversations
+                WHERE tenant_id = :tenant_id AND lead_id = :lead_id
+                ORDER BY started_at DESC LIMIT 25
+                """
+            ),
+            {"tenant_id": tenant_id, "lead_id": str(lead_id)},
+        )
+    )
+
+    memory = get_context(tenant_id=tenant_id, subject_type="lead", subject_id=str(lead_id))
+
+    return {
+        "tenant_id": tenant_id,
+        "lead": {
+            "id": str(lead.id),
+            "public_id": lead.public_id,
+            "email": lead.email,
+            "name": " ".join(filter(None, [lead.first_name, lead.last_name])) or None,
+            "company": lead.company,
+            "status": lead.status,
+            "current_score": lead.current_score,
+            "current_temperature": lead.current_temperature,
+            "analysis_confidence": lead.analysis_confidence,
+            "last_analysis_at": _iso(lead.last_analysis_at),
+            "created_at": _iso(lead.created_at),
+        },
+        "conversations": conversations,
+        "ferretdb_memory": _safe_store_value(memory) if memory else None,
+    }
+
+
+class UserSessionRequest(BaseModel):
+    """`identifier` is the lead's own phone number or email, entered on /user —
+    not the admin's login. It's the stable key that lets a returning lead be
+    recognized: matching it to an existing Lead reuses that lead_id, which is
+    also the FerretDB tenant_context subject_id, so their prior BANT/MEDDIC
+    evidence and conversation history are picked up automatically by
+    build_agent_context() on the very next turn instead of starting cold.
+    """
+    identifier: str | None = None
+
+
 @router.post("/ui/user/session")
 def create_user_session(
+    payload: UserSessionRequest = Body(default=UserSessionRequest()),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
-    """Create a real lead and conversation inside the authenticated tenant."""
-    lead = Lead(
-        id=uuid4(), tenant_id=current_user.tenant_id,
-        email=f"voice-{uuid4().hex[:12]}@local.follei",
-        first_name=current_user.first_name or "Voice", last_name="User",
-        company="Follei voice console",
-    )
-    db.add(lead)
-    db.flush()
+    """Create (or resume) a lead and start a new conversation for it.
+
+    Stores whatever the visitor types — phone or email — in Lead.email: that
+    column is a plain unvalidated String here (this console never enforces
+    email format), so it works as a single lookup key for either identifier
+    without needing the awkward Integer Lead.phone column.
+    """
+    identifier = (payload.identifier or "").strip()
+    returning_lead = False
+    lead: Lead | None = None
+    if identifier:
+        lead = (
+            db.query(Lead)
+            .filter(Lead.tenant_id == current_user.tenant_id, Lead.email == identifier)
+            .first()
+        )
+        returning_lead = lead is not None
+
+    if lead is None:
+        lead = Lead(
+            id=uuid4(), tenant_id=current_user.tenant_id,
+            email=identifier or f"voice-{uuid4().hex[:12]}@local.follei",
+            first_name=current_user.first_name or "Voice", last_name="User",
+            company="Follei voice console",
+        )
+        db.add(lead)
+        db.flush()
+
     conversation = Conversation(
         id=uuid4(), tenant_id=current_user.tenant_id, lead_id=lead.id,
         title="Voice console", channel="voice", status="active",
@@ -381,6 +544,7 @@ def create_user_session(
         "tenant_id": str(current_user.tenant_id),
         "lead_id": str(lead.id),
         "conversation_id": str(conversation.id),
+        "returning_lead": returning_lead,
     }
 
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Any
 from uuid import UUID
@@ -10,6 +11,29 @@ import numpy as np
 from app.config.settings import get_settings
 
 _settings = get_settings()
+
+# Keyword-triggered sentence extraction, not an LLM call: there is no working
+# local LLM configured (see model_manager.py's missing GGUF file), so this is
+# a deterministic stand-in for "extract this lead's stated requirements from
+# their speech/text" that costs nothing and never hallucinates a need that
+# wasn't actually said.
+_REQUIREMENT_KEYWORDS = re.compile(
+    r"\b(need|needs|needed|require|requires|required|requirement|want|wants|wanted|"
+    r"looking for|budget|deadline|timeline|must have|has to|have to|expect|expects|"
+    r"prefer|would like|asking for)\b",
+    re.IGNORECASE,
+)
+_SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+|\n+")
+
+
+def _extract_requirement_phrases(text: str, max_len: int = 220) -> list[str]:
+    """Pull out the sentences of *text* that state a need/want/constraint."""
+    phrases: list[str] = []
+    for sentence in _SENTENCE_SPLIT_RE.split(text):
+        sentence = sentence.strip()
+        if sentence and _REQUIREMENT_KEYWORDS.search(sentence):
+            phrases.append(sentence[:max_len])
+    return phrases
 
 
 class LearnedBANTService:
@@ -120,7 +144,80 @@ class LearnedBANTService:
                 lead_id=lead_id,
             )
 
+        # Carry qualification evidence forward across turns/sessions for this lead
+        # (FerretDB tenant_context), independent of whether the Postgres-side
+        # persistence above ran. Only needs tenant_id + lead_id, not a
+        # persistable conversation_id.
+        cls._accumulate_ferret_memory(tenant_id, lead_id, text, bant_scores, meddic_scores, result["source"])
+
         return result
+
+    @classmethod
+    def _accumulate_ferret_memory(
+        cls,
+        tenant_id: str | None,
+        lead_id: str | None,
+        text: str,
+        bant_scores: dict[str, Any],
+        meddic_scores: dict[str, Any],
+        source: str,
+    ) -> None:
+        """Merge this turn's BANT/MEDDIC evidence into the lead's FerretDB memory.
+
+        Scores are evidence-presence signals, so once a component is
+        established (e.g. budget confirmed in turn 1) a later, unrelated turn
+        should not silently erase it — hence merge-by-max rather than overwrite.
+        build_agent_context()'s customer_context already reads this same
+        tenant_context document, so anything written here is automatically
+        available to chat_pipeline()/workers on the very next turn.
+        """
+        if not tenant_id or not lead_id:
+            return
+        try:
+            from datetime import datetime, timezone
+            from app.services.knowledge.context_store import get_context, upsert_context
+
+            existing = get_context(tenant_id=tenant_id, subject_type="lead", subject_id=lead_id) or {}
+            prior_bant = existing.get("bant") or {}
+            prior_meddic = existing.get("meddic") or {}
+            merged_bant = {
+                key: max(float(prior_bant.get(key) or 0), float(value or 0))
+                for key, value in bant_scores.items()
+            }
+            merged_meddic = {
+                key: max(float(prior_meddic.get(key) or 0), float(value or 0))
+                for key, value in meddic_scores.items()
+            }
+            history = list(existing.get("qualification_history") or [])
+            history.append({
+                "text": text[:300],
+                "bant": bant_scores,
+                "meddic": meddic_scores,
+                "source": source,
+                "at": datetime.now(timezone.utc).isoformat(),
+            })
+            history = history[-20:]
+
+            requirements = list(existing.get("requirements") or [])
+            for phrase in _extract_requirement_phrases(text):
+                if phrase not in {item["text"] for item in requirements}:
+                    requirements.append({"text": phrase, "at": datetime.now(timezone.utc).isoformat()})
+            requirements = requirements[-30:]
+
+            upsert_context(
+                tenant_id=tenant_id,
+                subject_type="lead",
+                subject_id=lead_id,
+                updates={
+                    "bant": merged_bant,
+                    "meddic": merged_meddic,
+                    "qualification_history": history,
+                    "requirements": requirements,
+                },
+            )
+        except Exception as exc:
+            import logging
+            logging.getLogger(__name__).warning("Failed to accumulate lead qualification memory: %s", exc)
 
     @classmethod
     async def _persist_qualification(

@@ -74,7 +74,7 @@ async def handle_sales_turn(
     intent = classify_sales_intent(text)
 
     result = await chat_pipeline(question=text, tenant_id=tenant_id, session_id=session_id,
-                                 response_language=response_language)
+                                 response_language=response_language, lead_id=lead_id)
     conversation_id = result.get("conversation_id")
     grounded_answer = result.get("answer") or ""
 

@@ -24,6 +24,46 @@ def _json_safe(value):
     return json.loads(json.dumps(value, default=str))
 
 
+def _lead_profile_text(customer_context: dict) -> str | None:
+    """Turn accumulated per-lead FerretDB memory into a readable prompt section.
+
+    This is the piece that makes a reply *tailored* rather than a fresh RAG
+    lookup every turn: build_agent_context()'s customer_context now carries
+    forward this lead's own accumulated BANT/MEDDIC evidence and recent turns
+    (see learned_bant_service.py's _accumulate_ferret_memory), so the model
+    can reference what it already knows about *this* lead instead of treating
+    every question as if from a stranger.
+    """
+    if customer_context.get("subject_type") != "lead":
+        return None
+    bant = customer_context.get("bant") or {}
+    meddic = customer_context.get("meddic") or {}
+    history = customer_context.get("qualification_history") or []
+    lines: list[str] = []
+    strong_bant = {k: v for k, v in bant.items() if v and v >= 50}
+    if strong_bant:
+        lines.append("Established BANT signals: " + ", ".join(f"{k}={v:.0f}/100" for k, v in strong_bant.items()))
+    strong_meddic = {k: v for k, v in meddic.items() if v and v >= 50}
+    if strong_meddic:
+        lines.append("Established MEDDIC signals: " + ", ".join(f"{k}={v:.0f}/100" for k, v in strong_meddic.items()))
+    requirements = customer_context.get("requirements") or []
+    if requirements:
+        stated = "; ".join(str(item.get("text") or "")[:160] for item in requirements[-8:] if item.get("text"))
+        if stated:
+            lines.append(f"Things this lead has explicitly said they need/want: {stated}")
+    if history:
+        recent = "; ".join(str(item.get("text") or "")[:140] for item in history[-3:] if item.get("text"))
+        if recent:
+            lines.append(f"Recent things this lead has said: {recent}")
+    if not lines:
+        return None
+    return (
+        "LEAD PROFILE (source: FerretDB memory, accumulated across this lead's own "
+        "past turns — use it to tailor tone and relevance; do not read it back verbatim):\n"
+        + "\n".join(f"- {line}" for line in lines)
+    )
+
+
 def _format_agent_context(agent_context: dict) -> str:
     """Render orchestrator facts/customer memory as an extra grounded-context block."""
     sections: list[str] = []
@@ -41,7 +81,10 @@ def _format_agent_context(agent_context: dict) -> str:
             for item in relationships[:_MAX_FACTS_IN_CONTEXT]
         ))
     customer_context = agent_context.get("customer_context") or {}
-    if customer_context:
+    lead_profile = _lead_profile_text(customer_context)
+    if lead_profile:
+        sections.append(lead_profile)
+    elif customer_context:
         sections.append(f"CUSTOMER CONTEXT (source: FerretDB memory): {customer_context}")
     memory_evidence = agent_context.get("memory_evidence") or []
     if memory_evidence:
@@ -111,12 +154,30 @@ def _language_instruction(response_language: str | None) -> str:
     return f" Respond in {target}. Keep essential technical terms in English when clearer."
 
 
+# Grounding (only answer from supplied context) exists to stop invented facts,
+# not to make every reply that lacks one exact detail come back as a flat
+# refusal. Without this, "can you deliver in 10 days?" or "what's the price?"
+# got answered with a robotic "the retrieved documents do not contain this
+# information" even though a helpful human rep would engage with the question.
+_HUMAN_TONE_INSTRUCTION = (
+    " Answer like a knowledgeable, helpful person on this team would, not a document search engine. "
+    "If an exact detail (a specific price, a firm delivery date, a contractual commitment) is not in the "
+    "supplied context, do not just say you lack information: acknowledge what you do know, reason sensibly "
+    "about what's generally true or likely (e.g. whether a fast turnaround is realistic), and offer to confirm "
+    "the specific number or date with the team. Never invent a specific price, date, or commitment that is not "
+    "explicitly in the context — reasoning and warmth are fine, fabricated specifics are not."
+)
+
+
 async def chat_pipeline(question: str, tenant_id: str, session_id: str | None = None,
-                        response_language: str | None = None) -> dict:
+                        response_language: str | None = None, lead_id: str | None = None) -> dict:
     """Run a grounded answer path and emit one stage-by-stage latency trace.
 
     *response_language* (an ISO code such as 'ta'/'hi') makes the reply come back
     in that language, so a voice caller is answered in the language they spoke.
+    *lead_id*, when known, is what lets build_agent_context() pull that lead's
+    own accumulated BANT/MEDDIC/history (see _lead_profile_text) instead of only
+    generic tenant-level context.
     """
     trace = LatencyTrace(trace_id=session_id or str(uuid4()), tenant_id=tenant_id)
     try:
@@ -127,7 +188,7 @@ async def chat_pipeline(question: str, tenant_id: str, session_id: str | None = 
         else:
             search_query = question
             tailored_system_prompt = "Answer only from the supplied context. Do not invent facts."
-        tailored_system_prompt = (tailored_system_prompt or "") + _language_instruction(response_language)
+        tailored_system_prompt = (tailored_system_prompt or "") + _language_instruction(response_language) + _HUMAN_TONE_INSTRUCTION
         trace.mark("query_optimize")
 
         context, chunk_ids = await retrieve_context(search_query, tenant_id)
@@ -140,7 +201,7 @@ async def chat_pipeline(question: str, tenant_id: str, session_id: str | None = 
         # expansion coverage if used as a substitute for retrieve_context().
         orchestrator_db = SessionLocal()
         try:
-            agent_context = await build_agent_context(db=orchestrator_db, tenant_id=tenant_id, query=search_query)
+            agent_context = await build_agent_context(db=orchestrator_db, tenant_id=tenant_id, query=search_query, lead_id=lead_id)
         except Exception as exc:
             logger.warning(f"Orchestrator context unavailable, continuing with hybrid retrieval only: {exc}")
             agent_context = {"facts": {"approved": []}, "relationships": [], "customer_context": {}, "conflicts": []}
@@ -153,7 +214,7 @@ async def chat_pipeline(question: str, tenant_id: str, session_id: str | None = 
         conflicts = agent_context.get("conflicts") or []
 
         if not combined_context:
-            result = {"answer": "I don't have enough information to answer that question.", "citations": [], "confidence": 0.0, "supported": False, "reason": "No relevant documents found.", "conflicts": []}
+            result = {"answer": "I don't have anything on that topic yet — let me check with the team and get back to you.", "citations": [], "confidence": 0.0, "supported": False, "reason": "No relevant documents found.", "conflicts": []}
         elif conflicts:
             # Approved Postgres facts disagree for this question's topic. Never let
             # the LLM silently pick one side — surface the conflict instead of an answer.
@@ -176,7 +237,7 @@ async def chat_pipeline(question: str, tenant_id: str, session_id: str | None = 
             trace.mark("verify")
 
             if verification["confidence"] < _settings.MIN_CONFIDENCE or not verification["supported"]:
-                result = {"answer": "I don't have enough information to answer that question confidently.", "citations": [], "confidence": verification["confidence"], "supported": verification["supported"], "reason": verification["reason"], "conflicts": []}
+                result = {"answer": "I'm not fully confident in the details on that one — let me confirm with the team and follow up.", "citations": [], "confidence": verification["confidence"], "supported": verification["supported"], "reason": verification["reason"], "conflicts": []}
             else:
                 citations = _chunk_citations(chunk_ids) + _fact_citations(agent_context) + _graph_citations(agent_context) + _memory_citations(agent_context)
                 trace.mark("citations")

@@ -58,7 +58,7 @@ async def handle_sdr_turn(
 
     # Grounded, cited answer via the shared pipeline (same as the Support worker).
     result = await chat_pipeline(question=text, tenant_id=tenant_id, session_id=session_id,
-                                 response_language=response_language)
+                                 response_language=response_language, lead_id=lead_id)
     conversation_id = result.get("conversation_id")
     grounded_answer = result.get("answer") or ""
 

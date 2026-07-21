@@ -68,6 +68,11 @@ class VoiceAnalysisPipeline:
             crm_context=crm_context,
             business_docs=business_docs,
         )
+        # LeadScoringService.score() has no "confidence" key of its own — the
+        # closest analogue is the conversion-probability fraction it already
+        # computes, so surface it under that name for UI consumers that show
+        # "lead score / confidence" side by side (e.g. app/static/user_console.html).
+        lead_scores.setdefault("confidence", lead_scores.get("conversion_probability"))
 
         bant_scores = await LearnedBANTService.predict(
             text,
@@ -88,8 +93,8 @@ class VoiceAnalysisPipeline:
             }
         if fusion is not None:
             result["fusion"] = {
-                "fused_emotion": fusion.fused_emotion,
-                "fused_confidence": fusion.fused_confidence,
+                "fused_emotion": fusion.final_emotion,
+                "fused_confidence": fusion.confidence,
             }
         result["lead_scores"] = lead_scores
         result["bant"] = bant_scores
