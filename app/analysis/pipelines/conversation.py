@@ -89,7 +89,7 @@ class ConversationAnalysisPipeline:
             audio_path=audio_path,
         )
         ctx = self.registry.execute(ctx)
-        return self._context_to_result(ctx)
+        return await self._context_to_result(ctx)
 
     async def run_transcript(
         self,
@@ -106,7 +106,7 @@ class ConversationAnalysisPipeline:
             transcript=transcript,
         )
         ctx = self.registry.execute(ctx)
-        return self._context_to_result(ctx)
+        return await self._context_to_result(ctx)
 
     async def run_stream(
         self,
@@ -121,7 +121,7 @@ class ConversationAnalysisPipeline:
 
     # ── Internal ────────────────────────────────────────────────
 
-    def _context_to_result(self, ctx) -> AnalysisResult:
+    async def _context_to_result(self, ctx) -> AnalysisResult:
         result = AnalysisResult(
             conversation_id=ctx.conversation_id,
             tenant_id=ctx.tenant_id,
@@ -166,6 +166,23 @@ class ConversationAnalysisPipeline:
                 "verified_reasons": score_result.verified_reasons,
                 "components": score_result.components,
             }
+
+        # Merge in the full Lead Intelligence Engine (ICP/Intent/Engagement/
+        # Qualification/BuyingSignal/Relationship + BANT/MEDDIC) so this
+        # async/API-triggered path produces the same shape the live voice
+        # path already does (app/api/websocket_handler.py's
+        # _run_analysis_and_notify) — one shape for lead_scoring_worker to
+        # read regardless of which channel the conversation came from.
+        full_text = result.transcript.get("full_text") or ""
+        if full_text.strip():
+            from app.analysis.services.lead_scoring_service import LeadScoringService
+            from app.analysis.services.learned_bant_service import LearnedBANTService
+
+            engine_scores = LeadScoringService.score(full_text)
+            bant_scores = await LearnedBANTService.predict(
+                full_text, conversation_id=ctx.conversation_id, tenant_id=ctx.tenant_id,
+            )
+            result.lead_score = {**result.lead_score, **engine_scores, "bant": bant_scores}
 
         return result
 

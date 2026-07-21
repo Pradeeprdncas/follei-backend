@@ -6,6 +6,7 @@ from app.services.communications.protocols import CommunicationProvider, SendRes
 from app.services.communications.providers.email_provider import EmailProvider
 from app.services.communications.providers.whatsapp_provider import WhatsAppProvider
 from app.services.communications.providers.sms_provider import SmsProvider
+from app.services.communications.providers.brevo_sms_provider import BrevoSmsProvider
 from app.services.communications.providers.voice_provider import VoiceProvider
 from app.services.communications.providers.push_provider import PushProvider
 from app.services.communications.exceptions import ProviderNotConfigured, AllProvidersFailed
@@ -20,6 +21,14 @@ CHANNEL_PROVIDER_MAP = {
     "push": PushProvider,
 }
 
+# The "sms" channel resolves to one of these by the SMS_PROVIDER setting,
+# keeping Twilio the default while allowing a per-deployment switch to Brevo
+# without touching CHANNEL_PROVIDER_MAP or any caller.
+SMS_PROVIDER_MAP = {
+    "twilio": SmsProvider,
+    "brevo": BrevoSmsProvider,
+}
+
 
 class CommunicationRouter:
     """Routes messages to the best available provider per channel."""
@@ -28,10 +37,16 @@ class CommunicationRouter:
         self._settings = get_settings()
         self._providers: dict[str, CommunicationProvider] = {}
 
+    def _resolve_class(self, channel: str):
+        if channel == "sms":
+            selected = (self._settings.SMS_PROVIDER or "twilio").strip().lower()
+            return SMS_PROVIDER_MAP.get(selected, SmsProvider)
+        return CHANNEL_PROVIDER_MAP.get(channel)
+
     def _get_or_create(self, channel: str) -> CommunicationProvider:
         if channel in self._providers:
             return self._providers[channel]
-        cls = CHANNEL_PROVIDER_MAP.get(channel)
+        cls = self._resolve_class(channel)
         if not cls:
             raise ProviderNotConfigured(f"No provider class for channel: {channel}")
         try:

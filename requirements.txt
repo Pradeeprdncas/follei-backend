@@ -70,3 +70,9 @@ pymupdf
 torch
 transformers
 peft
+
+# Voice pipeline (app/analysis/pipelines/speech/preprocessing.py) — already
+# installed in this environment but was undeclared here.
+soundfile
+librosa
+noisereduce

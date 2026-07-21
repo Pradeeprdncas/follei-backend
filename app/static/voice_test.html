@@ -1,0 +1,394 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Follei — Local Voice Test</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; min-height: 100vh; background: #0f1115; color: #e6e8ec;
+    font: 15px/1.5 -apple-system, Segoe UI, Roboto, sans-serif;
+    display: flex; flex-direction: column; align-items: center; padding: 24px 16px 60px;
+  }
+  h1 { font-size: 18px; font-weight: 600; margin: 0 0 4px; }
+  .sub { color: #9aa2af; font-size: 13px; margin-bottom: 20px; }
+  .panel {
+    width: 100%; max-width: 720px; background: #171a21; border: 1px solid #262b36;
+    border-radius: 12px; padding: 18px 20px; margin-bottom: 16px;
+  }
+  .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  .ids { font-size: 12px; color: #6b7280; word-break: break-all; margin-top: 8px; }
+  button {
+    font: inherit; border: none; border-radius: 8px; padding: 10px 18px; cursor: pointer;
+    background: #2a3040; color: #e6e8ec; transition: background .15s;
+  }
+  button:hover:not(:disabled) { background: #363d52; }
+  button:disabled { opacity: .4; cursor: not-allowed; }
+  #micBtn { background: #3457ff; font-weight: 600; padding: 14px 28px; font-size: 15px; }
+  #micBtn:hover:not(:disabled) { background: #4a6bff; }
+  #micBtn.recording { background: #e0393e; }
+  #micBtn.recording:hover { background: #ef4b50; }
+  select, input[type=text] {
+    font: inherit; background: #10131a; color: #e6e8ec; border: 1px solid #2b3140;
+    border-radius: 6px; padding: 6px 10px;
+  }
+  #status { font-size: 13px; color: #9aa2af; min-height: 18px; }
+  #status.active { color: #56d364; }
+  #transcript {
+    max-height: 320px; overflow-y: auto; display: flex; flex-direction: column; gap: 10px;
+  }
+  .line { padding: 8px 12px; border-radius: 8px; max-width: 90%; font-size: 14px; }
+  .line.you { align-self: flex-end; background: #2a3040; }
+  .line.assistant { align-self: flex-start; background: #1c2b22; border: 1px solid #244530; }
+  .line .who { font-size: 11px; opacity: .6; margin-bottom: 2px; }
+  .scores { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 20px; }
+  .score-row { display: flex; flex-direction: column; gap: 4px; }
+  .score-label { display: flex; justify-content: space-between; font-size: 12px; color: #9aa2af; }
+  .bar { height: 6px; border-radius: 3px; background: #262b36; overflow: hidden; }
+  .bar-fill { height: 100%; background: linear-gradient(90deg, #3457ff, #56d364); border-radius: 3px; transition: width .3s; }
+  .bant-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-top: 14px; }
+  .bant-cell { background: #10131a; border-radius: 8px; padding: 8px; text-align: center; }
+  .bant-cell .k { font-size: 10px; text-transform: uppercase; color: #6b7280; letter-spacing: .04em; }
+  .bant-cell .v { font-size: 16px; font-weight: 600; margin-top: 2px; }
+  .empty { color: #6b7280; font-size: 13px; }
+  .footer-note { font-size: 12px; color: #565d6b; max-width: 720px; text-align: center; margin-top: 4px; }
+</style>
+</head>
+<body>
+
+<h1>Follei — Local Voice Test</h1>
+<div class="sub">Speak into your mic → ElevenLabs STT → AI reply → ElevenLabs TTS, with live BANT/MEDDIC + lead scores. Local only, no telephony.</div>
+
+<div class="panel">
+  <div class="row">
+    <button id="newSessionBtn">New Session</button>
+    <button id="micBtn" disabled>Start Speaking</button>
+    <label style="font-size:13px;color:#9aa2af;">Worker:
+      <select id="workerSelect" title="Which AI Workforce worker replies to each turn">
+        <option value="">Generic assistant</option>
+        <option value="sdr">SDR</option>
+        <option value="sales">Sales Executive</option>
+        <option value="support">Support</option>
+      </select>
+    </label>
+    <span id="status">Setting up session…</span>
+  </div>
+  <div class="ids" id="idsLine"></div>
+</div>
+
+<div class="panel">
+  <div id="transcript"><div class="empty">Conversation will appear here.</div></div>
+</div>
+
+<div class="panel">
+  <div id="scoresEmpty" class="empty">Lead intelligence scores will appear here after your first turn.</div>
+  <div id="scores" style="display:none">
+    <div class="scores" id="scoreBars"></div>
+    <div class="bant-grid" id="bantGrid"></div>
+  </div>
+</div>
+
+<div class="footer-note">This page talks directly to <code>/ws/voice/&#123;conversation_id&#125;</code>. Audio is recorded and WAV-encoded entirely in the browser — nothing is installed.</div>
+
+<script>
+const SCORE_FIELDS = [
+  ["icp_score", "ICP"],
+  ["intent_score", "Intent"],
+  ["engagement_score", "Engagement"],
+  ["qualification_score", "Qualification"],
+  ["buying_signal_score", "Buying Signal"],
+  ["relationship_score", "Relationship"],
+];
+const BANT_FIELDS = [
+  ["budget", "Budget"], ["authority", "Authority"], ["need", "Need"], ["timeline", "Timeline"],
+];
+
+let tenantId = null, leadId = null, conversationId = null;
+let ws = null;
+let audioContext = null, mediaStream = null, sourceNode = null, processorNode = null;
+let recordedChunks = [];
+let recording = false;
+let ttsQueue = [];
+let playingAudio = false;
+
+const micBtn = document.getElementById("micBtn");
+const statusEl = document.getElementById("status");
+const transcriptEl = document.getElementById("transcript");
+const idsLine = document.getElementById("idsLine");
+const scoresEmpty = document.getElementById("scoresEmpty");
+const scoresEl = document.getElementById("scores");
+const scoreBars = document.getElementById("scoreBars");
+const bantGrid = document.getElementById("bantGrid");
+
+function setStatus(text, active) {
+  statusEl.textContent = text;
+  statusEl.className = active ? "active" : "";
+}
+
+function addLine(who, text) {
+  if (!text) return;
+  const empty = transcriptEl.querySelector(".empty");
+  if (empty) empty.remove();
+  const div = document.createElement("div");
+  div.className = "line " + who;
+  const label = document.createElement("div");
+  label.className = "who";
+  label.textContent = who === "you" ? "You" : "Assistant";
+  const body = document.createElement("div");
+  body.textContent = text;
+  div.appendChild(label);
+  div.appendChild(body);
+  transcriptEl.appendChild(div);
+  transcriptEl.scrollTop = transcriptEl.scrollHeight;
+}
+
+function renderAnalysis(data) {
+  const lead = data.lead_scores || {};
+  const bant = data.bant || {};
+  scoresEmpty.style.display = "none";
+  scoresEl.style.display = "block";
+
+  scoreBars.innerHTML = "";
+  for (const [key, label] of SCORE_FIELDS) {
+    const val = Number(lead[key] ?? 0);
+    const row = document.createElement("div");
+    row.className = "score-row";
+    row.innerHTML = `
+      <div class="score-label"><span>${label}</span><span>${val.toFixed(0)}</span></div>
+      <div class="bar"><div class="bar-fill" style="width:${Math.max(0, Math.min(100, val))}%"></div></div>
+    `;
+    scoreBars.appendChild(row);
+  }
+
+  bantGrid.innerHTML = "";
+  const bantValues = bant.bant || bant.scores || bant;
+  for (const [key, label] of BANT_FIELDS) {
+    const raw = bantValues ? bantValues[key] : undefined;
+    const display = raw === undefined || raw === null ? "—" : (raw <= 1 ? Math.round(raw * 100) : Math.round(raw));
+    const cell = document.createElement("div");
+    cell.className = "bant-cell";
+    cell.innerHTML = `<div class="k">${label}</div><div class="v">${display}${display === "—" ? "" : ""}</div>`;
+    bantGrid.appendChild(cell);
+  }
+}
+
+async function bootstrapSession(forceNew) {
+  const cached = !forceNew && localStorage.getItem("follei_voice_test_session");
+  if (cached) {
+    const parsed = JSON.parse(cached);
+    tenantId = parsed.tenant_id; leadId = parsed.lead_id; conversationId = parsed.conversation_id;
+  } else {
+    setStatus("Creating a local test session…");
+    const resp = await fetch("/voice-test/session", { method: "POST" });
+    if (!resp.ok) { setStatus("Failed to create session — is the API running?"); return; }
+    const data = await resp.json();
+    tenantId = data.tenant_id; leadId = data.lead_id; conversationId = data.conversation_id;
+    localStorage.setItem("follei_voice_test_session", JSON.stringify(data));
+  }
+  idsLine.textContent = `tenant=${tenantId}  lead=${leadId}  conversation=${conversationId}`;
+  connectWebSocket();
+}
+
+function connectWebSocket() {
+  setStatus("Connecting…");
+  const scheme = location.protocol === "https:" ? "wss" : "ws";
+  const workerType = document.getElementById("workerSelect").value;
+  let url = `${scheme}://${location.host}/ws/voice/${conversationId}?tenant_id=${tenantId}`;
+  if (workerType) url += `&worker_type=${workerType}&lead_id=${leadId}`;
+  ws = new WebSocket(url);
+
+  ws.onopen = () => setStatus("Connecting…");
+  ws.onclose = () => { setStatus("Disconnected."); micBtn.disabled = true; };
+  ws.onerror = () => setStatus("WebSocket error — check the server log.");
+  ws.onmessage = (evt) => handleMessage(JSON.parse(evt.data));
+}
+
+function handleMessage(msg) {
+  switch (msg.type) {
+    case "voice_connected":
+      setStatus("Ready — click Start Speaking", true);
+      micBtn.disabled = false;
+      break;
+    case "transcript_received":
+      if (msg.is_final && msg.text) addLine("you", msg.text);
+      break;
+    case "voice_turn_queued":
+      setStatus("Your turn is queued behind the current reply…", true);
+      break;
+    case "filler":
+      // Not rendered here: the filler's own tts_chunk (source="filler") carries
+      // the same text and arrives right after, so rendering it here too would
+      // show the filler line twice.
+      break;
+    case "tts_chunk":
+      if (msg.text) addLine("assistant", msg.text);
+      enqueueAudio(msg.audio_base64, msg.format || "mp3");
+      break;
+    case "voice_analysis":
+      renderAnalysis(msg.data || {});
+      break;
+    case "worker_result": {
+      const d = msg.data || {};
+      let note = `worker: ${d.worker || "?"} · intent: ${d.intent || "?"}`;
+      if (d.handed_off_from) note += ` · handed off from ${d.handed_off_from}`;
+      if (d.actions && d.actions.length) note += ` · actions: ${d.actions.join(", ")}`;
+      if (d.deal_stage) note += ` · deal: ${d.deal_stage}`;
+      setStatus(note, true);
+      break;
+    }
+    case "analysis_triggered":
+      break;
+    case "upload_audio_error":
+      setStatus("Error: " + (msg.error || "unknown"));
+      break;
+    default:
+      break;
+  }
+}
+
+function enqueueAudio(base64, format) {
+  if (!base64) return;
+  ttsQueue.push(`data:audio/${format};base64,${base64}`);
+  playNextAudio();
+}
+
+function playNextAudio() {
+  if (playingAudio || ttsQueue.length === 0) return;
+  playingAudio = true;
+  const src = ttsQueue.shift();
+  const audio = new Audio(src);
+  const advance = () => { playingAudio = false; playNextAudio(); };
+  audio.onended = advance;
+  audio.onerror = advance;
+  audio.play().catch(advance);
+}
+
+// ── Mic capture: raw PCM via Web Audio API, encoded as WAV client-side ──
+
+async function startRecording() {
+  mediaStream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1 } });
+  audioContext = new (window.AudioContext || window.webkitAudioContext)();
+  sourceNode = audioContext.createMediaStreamSource(mediaStream);
+  processorNode = audioContext.createScriptProcessor(4096, 1, 1);
+  recordedChunks = [];
+
+  processorNode.onaudioprocess = (e) => {
+    recordedChunks.push(new Float32Array(e.inputBuffer.getChannelData(0)));
+  };
+
+  const muteNode = audioContext.createGain();
+  muteNode.gain.value = 0;
+  sourceNode.connect(processorNode);
+  processorNode.connect(muteNode);
+  muteNode.connect(audioContext.destination);
+
+  recording = true;
+  micBtn.textContent = "Stop Speaking";
+  micBtn.classList.add("recording");
+  setStatus("Listening…", true);
+}
+
+async function stopRecordingAndSend() {
+  recording = false;
+  micBtn.textContent = "Start Speaking";
+  micBtn.classList.remove("recording");
+  micBtn.disabled = true;
+  setStatus("Transcribing…", true);
+
+  processorNode.disconnect();
+  sourceNode.disconnect();
+  mediaStream.getTracks().forEach((t) => t.stop());
+  const sampleRate = audioContext.sampleRate;
+  const merged = mergeFloat32(recordedChunks);
+  await audioContext.close();
+
+  if (merged.length < sampleRate * 0.2) {
+    setStatus("Too short — click Start Speaking and try again.", true);
+    micBtn.disabled = false;
+    return;
+  }
+
+  const wavBuffer = encodeWAV(merged, sampleRate);
+  const base64 = arrayBufferToBase64(wavBuffer);
+
+  ws.send(JSON.stringify({ type: "upload_audio" }));
+  ws.send(JSON.stringify({ type: "upload_audio_chunk", data: base64 }));
+  ws.send(JSON.stringify({ type: "upload_audio_end" }));
+  micBtn.disabled = false;
+}
+
+function mergeFloat32(chunks) {
+  let length = 0;
+  for (const c of chunks) length += c.length;
+  const result = new Float32Array(length);
+  let offset = 0;
+  for (const c of chunks) { result.set(c, offset); offset += c.length; }
+  return result;
+}
+
+function encodeWAV(samples, sampleRate) {
+  const buffer = new ArrayBuffer(44 + samples.length * 2);
+  const view = new DataView(buffer);
+
+  const writeString = (offset, str) => {
+    for (let i = 0; i < str.length; i++) view.setUint8(offset + i, str.charCodeAt(i));
+  };
+
+  writeString(0, "RIFF");
+  view.setUint32(4, 36 + samples.length * 2, true);
+  writeString(8, "WAVE");
+  writeString(12, "fmt ");
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);
+  view.setUint16(22, 1, true);
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, sampleRate * 2, true);
+  view.setUint16(32, 2, true);
+  view.setUint16(34, 16, true);
+  writeString(36, "data");
+  view.setUint32(40, samples.length * 2, true);
+
+  let offset = 44;
+  for (let i = 0; i < samples.length; i++, offset += 2) {
+    const s = Math.max(-1, Math.min(1, samples[i]));
+    view.setInt16(offset, s < 0 ? s * 0x8000 : s * 0x7fff, true);
+  }
+  return buffer;
+}
+
+function arrayBufferToBase64(buffer) {
+  let binary = "";
+  const bytes = new Uint8Array(buffer);
+  const chunkSize = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunkSize) {
+    binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunkSize));
+  }
+  return btoa(binary);
+}
+
+micBtn.addEventListener("click", () => {
+  if (!recording) startRecording().catch((err) => setStatus("Mic error: " + err.message));
+  else stopRecordingAndSend();
+});
+
+document.getElementById("newSessionBtn").addEventListener("click", () => {
+  if (ws) ws.close();
+  transcriptEl.innerHTML = '<div class="empty">Conversation will appear here.</div>';
+  scoresEmpty.style.display = "block";
+  scoresEl.style.display = "none";
+  bootstrapSession(true);
+});
+
+// Switching worker reconnects the socket with the new worker_type query param.
+document.getElementById("workerSelect").addEventListener("change", () => {
+  if (ws) ws.close();
+  micBtn.disabled = true;
+  connectWebSocket();
+});
+
+bootstrapSession(false);
+</script>
+</body>
+</html>

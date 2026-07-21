@@ -23,5 +23,6 @@ from app.models.domain import FAQ, Policy, Procedure, Product, Service, SLA, Pri
 from app.models.onboarding_profile import OnboardingProfile
 from app.models.onboarding_contact_channel import OnboardingContactChannel
 from app.models.onboarding_goal import OnboardingGoal
+from app.models.learning_signal import LearningSignal
 
-__all__ = ["Tenant", "User", "Agent", "Conversation", "Message", "ConversationCitation", "Interaction", "Customer", "IntegrationConnection", "Lead", "Campaign", "KnowledgeBase", "Document", "Chunk", "BusinessFactDraft", "Entity", "EntityRelation", "KnowledgeSyncEvent", "IndexingJob", "OnboardingProfile", "OnboardingContactChannel", "OnboardingGoal", "BusinessPlan", "CustomerSegment", "SLA"]
+__all__ = ["Tenant", "User", "Agent", "Conversation", "Message", "ConversationCitation", "Interaction", "Customer", "IntegrationConnection", "Lead", "Campaign", "KnowledgeBase", "Document", "Chunk", "BusinessFactDraft", "Entity", "EntityRelation", "KnowledgeSyncEvent", "IndexingJob", "OnboardingProfile", "OnboardingContactChannel", "OnboardingGoal", "BusinessPlan", "CustomerSegment", "SLA", "LearningSignal"]

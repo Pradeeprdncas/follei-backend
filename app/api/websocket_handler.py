@@ -18,6 +18,7 @@ from app.events.base import (
     EVENT_INTERACTION_ANALYSIS_REQUESTED,
     EVENT_MESSAGE_ADDED,
 )
+from app.analysis.services.event_bus import EVENT_CONVERSATION_ANALYSIS_COMPLETED
 from app.services.rag.filler_service import generate_filler
 
 router = APIRouter()
@@ -125,12 +126,19 @@ async def voice_ws(
     conversation_id: str,
     tenant_id: str = Query(...),
     interaction_id: Optional[str] = Query(None),
+    worker_type: Optional[str] = Query(None),
+    lead_id: Optional[str] = Query(None),
 ):
     """Real-time voice streaming — receives audio/text chunks, streams analysis back.
 
     Modes:
     1. Client-side STT: browser sends transcribed text, server analyzes
     2. Audio upload: browser sends base64 WAV chunks, server Whisper STT + analyzes
+
+    When *worker_type* (sdr / sales / support) is supplied, each turn's reply is
+    produced by that AI Workforce worker via the orchestrator (with SDR->Sales
+    auto-handoff on qualification) instead of the generic grounded chat answer,
+    so "speak, and the right worker replies" works over the same socket.
     """
     await manager.connect(conversation_id, websocket)
     partial_transcript = []
@@ -148,7 +156,10 @@ async def voice_ws(
                     await previous_turn
                 except asyncio.CancelledError:
                     return
-            await _trigger_voice_analysis(conversation_id, tenant_id, interaction_id, transcript, websocket)
+            await _trigger_voice_analysis(
+                conversation_id, tenant_id, interaction_id, transcript, websocket,
+                worker_type=worker_type, lead_id=lead_id,
+            )
 
         if previous_turn and not previous_turn.done():
             await manager.send_to(websocket, {"type": "voice_turn_queued", "conversation_id": conversation_id})
@@ -300,11 +311,29 @@ async def _trigger_voice_analysis(
     interaction_id: Optional[str],
     transcript: str,
     ws: WebSocket,
+    worker_type: Optional[str] = None,
+    lead_id: Optional[str] = None,
 ):
-    """Run voice pipeline: RAG streaming ‖ filler → incremental TTS → Kafka event.
+    """Run voice pipeline: filler, then a spoken reply, sentence by sentence.
 
-    RAG answer generation is streamed token-by-token; completed sentences
-    are TTS'd immediately without waiting for the full answer.
+    The reply comes from one of two sources:
+      * If *worker_type* (sdr / sales / support) is set, run_worker() dispatches
+        the turn to that AI Workforce worker (with SDR->Sales auto-handoff), and
+        its reply is spoken. This is how a live voice call is handled by a
+        specific worker rather than a generic assistant.
+      * Otherwise, chat_pipeline() (app/services/rag/pipelines/chat.py) produces
+        a grounded, cited answer -- the same path the Support worker and the
+        proven /chat/ endpoint use.
+
+    Neither path uses app/services/rag/service.py's RAGService.stream_answer():
+    that class calls generate_answer()/generate_answer_streamed() with
+    mode=/language=/max_tokens=/model_name= kwargs that
+    app/services/rag/llm/generator.py's real generate_answer(question, context,
+    system_prompt) does not accept, and generate_answer_streamed does not exist
+    there at all -- RAGService targets a local multi-model streaming backend that
+    was never implemented (no local model weights are provisioned here either),
+    so it fails on the first call. The tradeoff versus that intended design is
+    that a turn speaks after the full answer is generated, not token-by-token.
     """
     import time as _time
     _pipeline_start = _time.perf_counter()
@@ -322,44 +351,27 @@ async def _trigger_voice_analysis(
                 logger.error("voice_background_bant status=failed conversation={} error={}", conversation_id, task.exception())
 
         analysis_task.add_done_callback(_log_background_analysis)
-    from app.services.rag.service import get_rag_service
 
-    # Step 0: Quick-assistant gate — skip RAG entirely for simple patterns
-    from app.analysis.services.quick_assistant_service import QuickAssistantService
-    quick_answer = QuickAssistantService.maybe_answer(transcript)
-    if quick_answer is not None:
-        logger.info("stage=quick_assistant_hit duration_ms={:.0f}", (_time.perf_counter() - _pipeline_start) * 1000)
-        await _speak_answer(quick_answer, conversation_id, ws)
-        return
+    # Step 0: Quick-assistant gate -- skip RAG entirely for simple patterns.
+    # Deliberately bypassed when a worker is driving the call: the quick
+    # assistant's canned sales/greeting replies would otherwise preempt exactly
+    # the buying-signal utterances (budget/demo/"ready to buy") an SDR or Sales
+    # worker most needs to handle, silently swallowing the worker turn.
+    if not worker_type:
+        from app.analysis.services.quick_assistant_service import QuickAssistantService
+        quick_answer = QuickAssistantService.maybe_answer(transcript)
+        if quick_answer is not None:
+            logger.info("stage=quick_assistant_hit duration_ms={:.0f}", (_time.perf_counter() - _pipeline_start) * 1000)
+            await _speak_answer(quick_answer, conversation_id, ws)
+            start_background_bant()
+            await manager.send_to(ws, {
+                "type": "analysis_triggered",
+                "conversation_id": conversation_id,
+                "transcript_length": len(transcript),
+            })
+            return
 
-    rag_service = get_rag_service()
-    stream_meta: dict = {}
-
-    # 0a. Start RAG answer streaming (runs pipeline eagerly in bg, tokens queued)
-    rag_gen = rag_service.stream_answer(
-        question=transcript, tenant_id=tenant_id, meta=stream_meta, response_style="tamil",
-    )
-    token_queue: asyncio.Queue = asyncio.Queue()
-    first_token_logged = False
-
-    async def _fill_token_queue():
-        nonlocal first_token_logged
-        try:
-            async for token in rag_gen:
-                if not first_token_logged:
-                    first_token_logged = True
-                    logger.info("voice_latency stage=rag_first_token elapsed_ms={:.0f} conversation={}", (_time.perf_counter() - _pipeline_start) * 1000, conversation_id)
-                logger.debug("DIAG:token_received seq={} token={!r:.40}", token_queue.qsize(), token)
-                token_queue.put_nowait(token)
-        except Exception as exc:
-            logger.error("stage=rag_stream_producer error={}", exc)
-        finally:
-            logger.debug("DIAG:token_sentinel token_queue.qsize={}", token_queue.qsize())
-            token_queue.put_nowait(None)
-
-    producer_task = asyncio.create_task(_fill_token_queue())
-
-    # 1. Generate filler concurrently
+    # 1. Generate filler immediately so the caller hears something right away
     t1 = _time.perf_counter()
     filler = await generate_filler(transcript)
     logger.info("stage=filler duration_ms={:.0f} text={}", (_time.perf_counter() - t1) * 1000, filler)
@@ -373,82 +385,66 @@ async def _trigger_voice_analysis(
             filler, conversation_id, ws, -1, False,
             source="filler", pipeline_start=_pipeline_start,
         )
-    # 2. Consume token stream; buffer into sentences and TTS as each completes
+
+    # 2. Produce the reply — via a dispatched worker if one was requested,
+    #    otherwise the generic grounded chat answer — then speak it.
     t2 = _time.perf_counter()
-    sentence_buf = ""
-    sentence_idx = 0
-    full_answer = ""
+    if worker_type:
+        from app.services.agents.orchestrator import run_worker, DISPATCHABLE_WORKER_TYPES
+        from app.database.session import SessionLocal
+        normalized_worker = worker_type.strip().lower()
+        if normalized_worker in DISPATCHABLE_WORKER_TYPES:
+            worker_db = SessionLocal()
+            try:
+                worker_result = await run_worker(
+                    worker_db, worker_type=normalized_worker, tenant_id=tenant_id,
+                    text=transcript, lead_id=lead_id, session_id=conversation_id, channel="voice",
+                )
+                full_answer = worker_result.get("reply") or "I'm sorry, I don't have an answer for that right now."
+                logger.info(
+                    "stage=worker_reply worker={} duration_ms={:.0f} intent={} actions={}",
+                    worker_result.get("worker"), (_time.perf_counter() - t2) * 1000,
+                    worker_result.get("intent"), worker_result.get("actions"),
+                )
+                await manager.send_to(ws, {
+                    "type": "worker_result",
+                    "conversation_id": conversation_id,
+                    "data": {k: v for k, v in worker_result.items() if k not in ("sdr_result",)},
+                })
+                await _speak_answer(full_answer, conversation_id, ws)
+                start_background_bant()
+                await manager.send_to(ws, {
+                    "type": "analysis_triggered",
+                    "conversation_id": conversation_id,
+                    "transcript_length": len(transcript),
+                })
+                logger.info("stage=voice_pipeline_total duration_ms={:.0f}", (_time.perf_counter() - _pipeline_start) * 1000)
+                return
+            except Exception as exc:
+                logger.error("stage=worker_dispatch_error worker={} error={}", normalized_worker, exc)
+                # Fall through to the generic grounded answer below.
+            finally:
+                worker_db.close()
+        else:
+            logger.warning("Ignoring unknown voice worker_type={}; using grounded answer", worker_type)
 
-    logger.debug("DIAG:consumer_start t2={:.6f}", t2)
-    while True:
-        token = await token_queue.get()
-        if token is None:
-            logger.debug("DIAG:consumer_sentinel_received")
-            break
-        logger.debug("DIAG:consumer_token_received buf_len={} token={!r:.40}", len(sentence_buf), token)
-        full_answer += token
-        sentence_buf += token
-        while True:
-            # Split on punctuation (ASCII . ! ? and Indic danda)
-            m = re.search(r"(?<=[.!?\u0964\u0965])\s+", sentence_buf)
-            if m is None and len(sentence_buf) >= 200:
-                # Safety net: flush long buffer even without punctuation
-                last_ws = sentence_buf.rfind(" ")
-                if last_ws > 0:
-                    sentence = sentence_buf[:last_ws].strip()
-                    sentence_buf = sentence_buf[last_ws:].strip()
-                else:
-                    sentence = sentence_buf[:200].strip()
-                    sentence_buf = sentence_buf[200:].strip()
-                if sentence:
-                    logger.debug("DIAG:sentence_boundary idx={} chars={} sentence={!r:.60}", sentence_idx, len(sentence), sentence)
-                    await _speak_single_sentence(sentence, conversation_id, ws, sentence_idx, False)
-                    sentence_idx += 1
-                    continue
-                break
-            if m is None:
-                break
-            sentence = sentence_buf[:m.end()].strip()
-            sentence_buf = sentence_buf[m.end():]
-            if sentence:
-                logger.debug("DIAG:sentence_boundary idx={} chars={} sentence={!r:.60}", sentence_idx, len(sentence), sentence)
-                await _speak_single_sentence(sentence, conversation_id, ws, sentence_idx, False)
-                sentence_idx += 1
-
-    # Flush remaining partial sentence
-    if sentence_buf.strip():
-        await _speak_single_sentence(sentence_buf.strip(), conversation_id, ws, sentence_idx, True)
-
-    # 3. Log timing from stream_meta
-    stage_timings = stream_meta.get("stage_timings_ms", {})
-    rag_total_ms = stream_meta.get("latency_ms", "?")
+    # 2b. Generic grounded answer (no worker requested, or worker dispatch failed).
+    from app.services.rag.pipelines.chat import chat_pipeline
+    result = await chat_pipeline(question=transcript, tenant_id=tenant_id, session_id=conversation_id)
+    full_answer = result.get("answer") or "I'm sorry, I don't have an answer for that right now."
     logger.info(
-        "stage=rag_stream_complete duration_ms={:.0f} classify={} embed={} search={} context={} gen={} total={}",
-        (_time.perf_counter() - t2) * 1000,
-        stage_timings.get("classify_ms", "?"),
-        stage_timings.get("embed_query_ms", "?"),
-        stage_timings.get("qdrant_search_ms", "?"),
-        stage_timings.get("context_build_ms", "?"),
-        stage_timings.get("generation_ms", "?"),
-        rag_total_ms,
+        "stage=chat_pipeline_complete duration_ms={:.0f} confidence={} supported={}",
+        (_time.perf_counter() - t2) * 1000, result.get("confidence"), result.get("supported"),
     )
+    await _speak_answer(full_answer, conversation_id, ws)
 
-    logger.info("voice_latency stage=rag_retrieval elapsed_ms={:.0f} search_ms={} embed_ms={} conversation={}", (_time.perf_counter() - _pipeline_start) * 1000, stage_timings.get("qdrant_search_ms", "?"), stage_timings.get("embed_query_ms", "?"), conversation_id)
+    logger.info("voice_latency stage=rag_retrieval elapsed_ms={:.0f} conversation={}", (_time.perf_counter() - _pipeline_start) * 1000, conversation_id)
 
-    # Start BANT only after all answer audio has been delivered.
+    # Start BANT only after all answer audio has been delivered. This background
+    # task (_run_analysis_and_notify) is the sole place that both computes and
+    # persists lead_score/BANT/MEDDIC for this turn — see its docstring for why
+    # this path does not also route through app/analysis/workers/analysis_worker.py.
     start_background_bant()
-
-    # 4. Publish domain event for downstream RAG persistence (fire-and-forget)
-    t3 = _time.perf_counter()
-    analysis_data = {
-        "conversation_id": conversation_id,
-        "interaction_id": interaction_id or "",
-        "transcript": transcript,
-        "answer": full_answer,
-        "source": "voice",
-    }
-    publisher.publish(EVENT_INTERACTION_ANALYSIS_REQUESTED, tenant_id, analysis_data)
-    logger.info("stage=kafka_publish duration_ms={:.0f}", (_time.perf_counter() - t3) * 1000)
 
     await manager.send_to(ws, {
         "type": "analysis_triggered",
@@ -556,7 +552,19 @@ async def _run_analysis_and_notify(
     tenant_id: str,
     ws: WebSocket,
 ):
-    """Run BANT/MEDDIC analysis in background; send WS update when done."""
+    """Run BANT/MEDDIC analysis in background; send WS update, then persist + publish.
+
+    This is the only place a voice turn's lead_scores/BANT get computed, so it's
+    also the only place they get saved. Deliberately does NOT go through
+    app/analysis/workers/analysis_worker.py's EVENT_CONVERSATION_ANALYSIS_REQUESTED
+    path: that worker's own ConversationAnalysisPipeline would redundantly
+    re-derive sentiment/emotion from the transcript with a *different*,
+    BANT-less scorer (app/analysis/lead_scoring/scorer.py) and race this
+    function to overwrite the same ConversationAnalysis row. Persisting the
+    result already computed here and publishing EVENT_CONVERSATION_ANALYSIS_COMPLETED
+    directly keeps one shape, one write, one source of truth — and still lets
+    app/workers/lead_scoring_worker.py (or anything else) react to completion.
+    """
     try:
         from app.analysis.services.voice_analysis_pipeline import VoiceAnalysisPipeline
         VoiceAnalysisPipeline.initialize()
@@ -574,6 +582,41 @@ async def _run_analysis_and_notify(
         })
     except Exception as e:
         logger.error("=== VOICE_TRACE analysis_exception: {}", e)
+        return
+
+    try:
+        lead_scores = analysis_result.get("lead_scores") or {}
+        bant = analysis_result.get("bant") or {}
+        combined_lead_score = {**lead_scores, "bant": bant}
+
+        from app.analysis.services.conversation_analysis_service import ConversationAnalysisService
+        analysis_service = ConversationAnalysisService()
+        await asyncio.to_thread(analysis_service.create_analysis, conversation_id=conversation_id, tenant_id=tenant_id)
+        saved = await asyncio.to_thread(
+            analysis_service.update_complete_analysis,
+            conversation_id=conversation_id,
+            analysis={
+                "transcript": {"full_text": transcript, "segments": [{"text": transcript, "speaker": "user"}]},
+                "sentiment": analysis_result.get("sentiment") or {},
+                # VoiceAnalysisPipeline.analyze() is called with text only (no
+                # audio array), so voice_emotion is never populated here; pass
+                # None rather than {} so AnalysisOutputValidator.validate_all()
+                # skips it instead of failing the whole write on "emotion data
+                # is empty" for a field that was never meant to be present.
+                "emotion": analysis_result.get("voice_emotion") or None,
+                "fusion": analysis_result.get("fusion") or {},
+                "lead_score": combined_lead_score,
+            },
+        )
+        if saved:
+            publisher.publish(EVENT_CONVERSATION_ANALYSIS_COMPLETED, tenant_id, {
+                "conversation_id": conversation_id,
+                "status": "completed",
+                "lead_score": combined_lead_score,
+                "source": "voice",
+            })
+    except Exception as e:
+        logger.error("=== VOICE_TRACE analysis_persist_exception: {}", e)
 
 
 def _build_reply_text(transcript: str, analysis: dict | None = None) -> str:
