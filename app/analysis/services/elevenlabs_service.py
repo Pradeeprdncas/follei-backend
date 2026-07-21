@@ -42,9 +42,10 @@ class ElevenLabsService:
             )
             response.raise_for_status()
             payload = response.json()
+        from app.analysis.pipelines.language_service import LanguageService
         return {
             "text": str(payload.get("text", "")).strip(),
-            "language": str(payload.get("language_code") or "en").split("-")[0],
+            "language": LanguageService.normalize(payload.get("language_code")),
             "language_probability": payload.get("language_probability"),
             "provider": "elevenlabs",
             "model": _settings.ELEVENLABS_STT_MODEL,

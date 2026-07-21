@@ -61,6 +61,7 @@ async def run_worker(
     lead_id: str | None = None,
     session_id: str | None = None,
     channel: str = "voice",
+    response_language: str | None = None,
 ) -> dict[str, Any]:
     """Dispatch one turn to a worker; auto-hand SDR->Sales on qualification.
 
@@ -81,20 +82,21 @@ async def run_worker(
         from app.services.agents.support.worker import handle_inbound_message
         return await handle_inbound_message(
             db, tenant_id=tenant_id, text=text, session_id=session_id, channel=channel,
+            response_language=response_language,
         )
 
     if normalized == "sales":
         from app.services.agents.sales.worker import handle_sales_turn
         return await handle_sales_turn(
             db, tenant_id=tenant_id, text=text, lead_id=lead_id,
-            session_id=session_id, channel=channel,
+            session_id=session_id, channel=channel, response_language=response_language,
         )
 
     # normalized == "sdr"
     from app.services.agents.sdr.worker import handle_sdr_turn
     sdr_result = await handle_sdr_turn(
         db, tenant_id=tenant_id, text=text, lead_id=lead_id,
-        session_id=session_id, channel=channel,
+        session_id=session_id, channel=channel, response_language=response_language,
     )
     if not sdr_result.get("handoff_to_sales"):
         return sdr_result
@@ -104,7 +106,7 @@ async def run_worker(
     from app.services.agents.sales.worker import handle_sales_turn
     sales_result = await handle_sales_turn(
         db, tenant_id=tenant_id, text=text, lead_id=lead_id,
-        session_id=session_id, channel=channel,
+        session_id=session_id, channel=channel, response_language=response_language,
     )
     sales_result["handed_off_from"] = "sdr"
     sales_result["sdr_result"] = sdr_result

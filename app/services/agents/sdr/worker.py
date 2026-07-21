@@ -46,6 +46,7 @@ async def handle_sdr_turn(
     lead_id: str | None = None,
     session_id: str | None = None,
     channel: str = "voice",
+    response_language: str | None = None,
 ) -> dict[str, Any]:
     """Process one inbound lead message as an SDR.
 
@@ -56,7 +57,8 @@ async def handle_sdr_turn(
     intent = classify_sdr_intent(text)
 
     # Grounded, cited answer via the shared pipeline (same as the Support worker).
-    result = await chat_pipeline(question=text, tenant_id=tenant_id, session_id=session_id)
+    result = await chat_pipeline(question=text, tenant_id=tenant_id, session_id=session_id,
+                                 response_language=response_language)
     conversation_id = result.get("conversation_id")
     grounded_answer = result.get("answer") or ""
 

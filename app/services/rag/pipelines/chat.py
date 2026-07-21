@@ -90,8 +90,34 @@ def _chunk_citations(chunk_ids: list[str]) -> list[dict]:
     return [{**citation, "source": citation.get("source") or "qdrant_chunk"} for citation in extract_citations(chunk_ids)]
 
 
-async def chat_pipeline(question: str, tenant_id: str, session_id: str | None = None) -> dict:
-    """Run a grounded answer path and emit one stage-by-stage latency trace."""
+_LANGUAGE_NAMES = {
+    "en": "English", "ta": "Tamil", "hi": "Hindi", "te": "Telugu", "ml": "Malayalam",
+    "kn": "Kannada", "mr": "Marathi", "bn": "Bengali", "gu": "Gujarati", "pa": "Punjabi",
+    "es": "Spanish", "fr": "French", "de": "German", "ar": "Arabic", "zh": "Chinese",
+    "ja": "Japanese", "ko": "Korean", "pt": "Portuguese", "ru": "Russian",
+}
+
+
+def _language_instruction(response_language: str | None) -> str:
+    """A reply-language directive for the system prompt, or '' when not needed."""
+    if not response_language:
+        return ""
+    from app.analysis.pipelines.language_service import LanguageService
+    code = LanguageService.normalize(response_language)
+    if code in ("", "en"):
+        return ""  # English is the default; no directive needed.
+    name = _LANGUAGE_NAMES.get(code)
+    target = name or "the same language the user spoke in"
+    return f" Respond in {target}. Keep essential technical terms in English when clearer."
+
+
+async def chat_pipeline(question: str, tenant_id: str, session_id: str | None = None,
+                        response_language: str | None = None) -> dict:
+    """Run a grounded answer path and emit one stage-by-stage latency trace.
+
+    *response_language* (an ISO code such as 'ta'/'hi') makes the reply come back
+    in that language, so a voice caller is answered in the language they spoke.
+    """
     trace = LatencyTrace(trace_id=session_id or str(uuid4()), tenant_id=tenant_id)
     try:
         if _settings.RAG_ENABLE_QUERY_OPTIMIZATION:
@@ -101,6 +127,7 @@ async def chat_pipeline(question: str, tenant_id: str, session_id: str | None = 
         else:
             search_query = question
             tailored_system_prompt = "Answer only from the supplied context. Do not invent facts."
+        tailored_system_prompt = (tailored_system_prompt or "") + _language_instruction(response_language)
         trace.mark("query_optimize")
 
         context, chunk_ids = await retrieve_context(search_query, tenant_id)

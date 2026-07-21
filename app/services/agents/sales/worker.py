@@ -64,6 +64,7 @@ async def handle_sales_turn(
     lead_id: str | None = None,
     session_id: str | None = None,
     channel: str = "voice",
+    response_language: str | None = None,
 ) -> dict[str, Any]:
     """Process one inbound message as a Sales Executive.
 
@@ -72,7 +73,8 @@ async def handle_sales_turn(
     """
     intent = classify_sales_intent(text)
 
-    result = await chat_pipeline(question=text, tenant_id=tenant_id, session_id=session_id)
+    result = await chat_pipeline(question=text, tenant_id=tenant_id, session_id=session_id,
+                                 response_language=response_language)
     conversation_id = result.get("conversation_id")
     grounded_answer = result.get("answer") or ""
 

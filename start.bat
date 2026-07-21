@@ -3,148 +3,144 @@ setlocal EnableExtensions
 
 set "ROOT=%~dp0"
 set "PYTHON=%ROOT%follei_backend\indic_tts_venv\Scripts\python.exe"
+set "COMPOSE=%ROOT%docker-compose.yml"
 set "PORT=8000"
+set "NO_OPEN=0"
+set "NO_PAUSE=0"
 
-rem Connection settings, credentials, and API keys are loaded from .env.
-rem Do not override them here: environment variables would take precedence over .env.
+:parse_args
+if "%~1"=="" goto :args_done
+if /I "%~1"=="--no-open" set "NO_OPEN=1"
+if /I "%~1"=="--no-pause" set "NO_PAUSE=1"
+shift
+goto :parse_args
+:args_done
 
 cd /d "%ROOT%"
 echo.
-echo ========================================
-echo        Follei startup
-echo ========================================
+echo ==========================================================
+echo                 Follei local startup
+echo ==========================================================
 echo Root: %ROOT%
+echo.
 
 if not exist "%PYTHON%" (
-  echo [ERROR] Python runtime not found:
+  echo [ERROR] Canonical Python runtime was not found:
   echo         %PYTHON%
-  echo Create the canonical venv before starting Follei.
-  pause
-  exit /b 1
+  goto :failed
 )
 
-if exist "%ROOT%requirements.txt" (
-  echo [INFO] Installing/updating Python dependencies from requirements.txt...
+if not exist "%ROOT%.env" (
+  echo [ERROR] %ROOT%.env is missing. Follei cannot load its local settings.
+  goto :failed
+)
+
+echo [1/7] Checking Python dependencies...
+"%PYTHON%" -c "import fastapi,uvicorn,kafka,qdrant_client,pymongo,boto3,playwright" >nul 2>&1
+if errorlevel 1 (
+  echo [INFO] One or more dependencies are missing. Installing requirements...
   "%PYTHON%" -m pip install -r "%ROOT%requirements.txt"
   if errorlevel 1 (
-    echo [ERROR] Dependency installation failed. Follei was not started.
-    pause
-    exit /b 1
-  )
-)
-
-echo [INFO] Ensuring the bounded website crawler Chromium runtime exists...
-"%PYTHON%" -m playwright install chromium
-if errorlevel 1 (
-  echo [WARN] Playwright Chromium is unavailable. Server-rendered websites can still be ingested,
-  echo        but JavaScript-only websites will require this runtime.
-)
-
-set "COMPOSE_FILE="
-if exist "%ROOT%docker-compose.yml" set "COMPOSE_FILE=%ROOT%docker-compose.yml"
-if not defined COMPOSE_FILE if exist "%ROOT%follei_backend\follei\docker-compose.yml" set "COMPOSE_FILE=%ROOT%follei_backend\follei\docker-compose.yml"
-
-if defined COMPOSE_FILE (
-  echo [INFO] Starting Docker services from:
-  echo        %COMPOSE_FILE%
-  docker compose -p follei-backend-team -f "%COMPOSE_FILE%" up -d postgres redis qdrant minio ferretdb-postgres ferretdb zookeeper kafka
-  if errorlevel 1 (
-    echo [WARN] Docker Compose could not start all services.
-    echo        Continuing so existing services can still be used.
+    echo [ERROR] Python dependency installation failed.
+    goto :failed
   )
 ) else (
-  echo [INFO] No Compose file found in the active checkout.
-  echo        Using already-running Docker services.
+  echo [OK] Python dependencies are available.
 )
 
-call :check_url "Qdrant" "http://localhost:6333/readyz"
-call :check_port "FerretDB" 27017
-call :check_port "PostgreSQL" 55589
-call :check_port "Redis" 6379
-call :check_port "Kafka" 9092
-call :check_port "Object storage" 9000
+echo [2/7] Checking the website-ingestion browser runtime...
+"%PYTHON%" -m playwright install chromium >nul
+if errorlevel 1 (
+  echo [WARN] Chromium could not be installed. Normal documents and server-rendered
+  echo        websites still work; JavaScript-only websites may not.
+) else (
+  echo [OK] Chromium runtime is available.
+)
 
-echo [INFO] Ensuring the local base database schema exists...
+echo [3/7] Starting local infrastructure...
+where docker >nul 2>&1
+if errorlevel 1 (
+  echo [WARN] Docker CLI was not found. Checking for already-running services.
+) else if exist "%COMPOSE%" (
+  docker compose -p follei-backend-team -f "%COMPOSE%" up -d postgres redis qdrant minio ferretdb-postgres ferretdb zookeeper kafka
+  if errorlevel 1 echo [WARN] Docker Compose reported an error; existing services will still be checked.
+)
+
+echo [4/7] Waiting for required stores and queues...
+call :require_port "PostgreSQL" 55589 60
+if errorlevel 1 goto :failed
+call :require_port "Redis" 6379 60
+if errorlevel 1 goto :failed
+call :require_port "Kafka" 9092 90
+if errorlevel 1 goto :failed
+call :require_port "FerretDB" 27017 60
+if errorlevel 1 goto :failed
+call :require_port "Object storage" 9000 60
+if errorlevel 1 goto :failed
+call :require_url "Qdrant" "http://127.0.0.1:6333/readyz" 60
+if errorlevel 1 goto :failed
+
+echo [5/7] Applying the local database schema...
 "%PYTHON%" -m app.database.bootstrap
 if errorlevel 1 (
-  echo [ERROR] Base database schema initialization failed. Follei was not started.
-  pause
-  exit /b 1
+  echo [ERROR] Base database schema initialization failed.
+  goto :failed
 )
-
-echo [INFO] Applying non-destructive database migrations...
 "%PYTHON%" -m alembic upgrade head
 if errorlevel 1 (
-  echo [ERROR] Database migration failed. Follei was not started.
-  pause
-  exit /b 1
+  echo [ERROR] Database migration failed.
+  goto :failed
 )
+echo [OK] Database schema is current.
 
-for /f "tokens=5" %%P in ('netstat -ano ^| findstr /R /C:":%PORT% .*LISTENING"') do (
-  echo [WARN] Port %PORT% is already in use by PID %%P. The API may already be running.
-  goto :after_port_check
-)
-:after_port_check
+echo [6/7] Starting API and all required workers...
+set "OPEN_ARG="
+if "%NO_OPEN%"=="1" set "OPEN_ARG=-NoOpen"
+powershell -NoProfile -ExecutionPolicy Bypass -File "%ROOT%scripts\start_local_runtime.ps1" -Root "%ROOT:~0,-1%" -Python "%PYTHON%" -Port %PORT% %OPEN_ARG%
+if errorlevel 1 goto :failed
 
-call :require_port "Kafka" 9092
-if errorlevel 1 (
-  echo [ERROR] Kafka is required for queued indexing. Follei workers were not started.
-  pause
-  exit /b 1
-)
-
-echo [INFO] Starting Follei indexing worker...
-start "Follei Indexing Worker" /D "%ROOT%" "%PYTHON%" -m app.workers.indexing_consumer
-echo [INFO] Starting Follei knowledge sync worker...
-start "Follei Knowledge Sync Worker" /D "%ROOT%" "%PYTHON%" -m app.workers.knowledge_sync_consumer
-
-echo [INFO] Starting Follei API on port %PORT%...
-start "Follei API" /D "%ROOT%" "%PYTHON%" -m uvicorn app.main:app --reload --port %PORT%
-
-timeout /t 3 /nobreak >nul
-call :check_url "Follei API" "http://localhost:%PORT%/health/"
-
+echo [7/7] Startup complete.
 echo.
-echo Follei startup command completed.
-echo API:     http://localhost:%PORT%
-echo Docs:    http://localhost:%PORT%/docs
-echo Chat:    http://localhost:%PORT%/chat/
-echo Review:  http://localhost:%PORT%/knowledge/review/drafts
+echo Tenant console: http://127.0.0.1:%PORT%/tenant
+echo Voice console:  http://127.0.0.1:%PORT%/user
+echo API docs:       http://127.0.0.1:%PORT%/docs
+echo Worker output:  visible, separately titled terminal windows
+echo Runtime state:  %ROOT%logs\runtime
+echo.
+if "%NO_PAUSE%"=="0" pause
 endlocal
 exit /b 0
 
-:check_url
-set "CHECK_NAME=%~1"
-set "CHECK_URL=%~2"
-for /l %%N in (1,1,10) do (
-  powershell -NoProfile -ExecutionPolicy Bypass -Command "try { $r=Invoke-WebRequest -UseBasicParsing -TimeoutSec 2 '%CHECK_URL%'; if($r.StatusCode -ge 200 -and $r.StatusCode -lt 500){ exit 0 } } catch {} ; exit 1" >nul 2>&1
-  if not errorlevel 1 (
-    echo [OK] %CHECK_NAME% ready: %CHECK_URL%
-    exit /b 0
-  )
-  timeout /t 1 /nobreak >nul
-)
-echo [WARN] %CHECK_NAME% not reachable yet: %CHECK_URL%
-exit /b 0
-
-:check_port
-set "CHECK_NAME=%~1"
-set "CHECK_PORT=%~2"
-powershell -NoProfile -ExecutionPolicy Bypass -Command "if((Test-NetConnection localhost -Port %CHECK_PORT% -WarningAction SilentlyContinue).TcpTestSucceeded){exit 0}else{exit 1}" >nul 2>&1
-if not errorlevel 1 (
-  echo [OK] %CHECK_NAME% port %CHECK_PORT% reachable
-) else (
-  echo [WARN] %CHECK_NAME% port %CHECK_PORT% not reachable
-)
-exit /b 0
+:failed
+echo.
+echo ==========================================================
+echo [FAILED] Follei did not start completely.
+echo Review the error above and the separately titled worker terminals.
+echo ==========================================================
+if "%NO_PAUSE%"=="0" pause
+endlocal
+exit /b 1
 
 :require_port
 set "CHECK_NAME=%~1"
 set "CHECK_PORT=%~2"
-for /l %%N in (1,1,20) do (
-  powershell -NoProfile -ExecutionPolicy Bypass -Command "if((Test-NetConnection localhost -Port %CHECK_PORT% -WarningAction SilentlyContinue).TcpTestSucceeded){exit 0}else{exit 1}" >nul 2>&1
-  if not errorlevel 1 exit /b 0
-  timeout /t 1 /nobreak >nul
+set "CHECK_SECONDS=%~3"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$deadline=(Get-Date).AddSeconds(%CHECK_SECONDS%); do { try { $c=[System.Net.Sockets.TcpClient]::new(); $task=$c.ConnectAsync('127.0.0.1',%CHECK_PORT%); if($task.Wait(750) -and $c.Connected){$c.Dispose();exit 0};$c.Dispose() } catch {}; Start-Sleep -Milliseconds 750 } while((Get-Date)-lt $deadline); exit 1" >nul 2>&1
+if errorlevel 1 (
+  echo [ERROR] %CHECK_NAME% did not become reachable on port %CHECK_PORT%.
+  exit /b 1
 )
-echo [ERROR] %CHECK_NAME% port %CHECK_PORT% did not become reachable.
-exit /b 1
+echo [OK] %CHECK_NAME% is reachable on port %CHECK_PORT%.
+exit /b 0
+
+:require_url
+set "CHECK_NAME=%~1"
+set "CHECK_URL=%~2"
+set "CHECK_SECONDS=%~3"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$deadline=(Get-Date).AddSeconds(%CHECK_SECONDS%); do { try { $r=Invoke-WebRequest -UseBasicParsing -TimeoutSec 2 '%CHECK_URL%'; if($r.StatusCode -ge 200 -and $r.StatusCode -lt 400){exit 0} } catch {}; Start-Sleep -Milliseconds 750 } while((Get-Date)-lt $deadline); exit 1" >nul 2>&1
+if errorlevel 1 (
+  echo [ERROR] %CHECK_NAME% did not become ready: %CHECK_URL%
+  exit /b 1
+)
+echo [OK] %CHECK_NAME% is ready.
+exit /b 0

@@ -128,6 +128,7 @@ async def voice_ws(
     interaction_id: Optional[str] = Query(None),
     worker_type: Optional[str] = Query(None),
     lead_id: Optional[str] = Query(None),
+    access_token: Optional[str] = Query(None),
 ):
     """Real-time voice streaming — receives audio/text chunks, streams analysis back.
 
@@ -141,12 +142,40 @@ async def voice_ws(
     so "speak, and the right worker replies" works over the same socket.
     """
     await manager.connect(conversation_id, websocket)
+    # Product clients authenticate with the same short-lived tenant JWT used
+    # by HTTP APIs. The legacy /voice-test route remains tokenless local demo
+    # tooling for backward compatibility.
+    if access_token:
+        try:
+            from app.core.security import decode_access_token
+            from app.database.session import SessionLocal
+            from sqlalchemy import text as sa_text
+            claims = decode_access_token(access_token)
+            if str(claims.get("tenant_id")) != str(tenant_id):
+                raise ValueError("Tenant claim mismatch")
+            with SessionLocal() as auth_db:
+                owner = auth_db.execute(
+                    sa_text("SELECT tenant_id FROM conversations WHERE id = :id"),
+                    {"id": conversation_id},
+                ).scalar()
+            if owner is None or str(owner) != str(tenant_id):
+                raise ValueError("Conversation tenant mismatch")
+        except Exception:
+            await manager.send_to(websocket, {"type": "auth_error", "error": "Invalid or mismatched voice session"})
+            await websocket.close(code=1008)
+            manager.disconnect(conversation_id, websocket)
+            return
     partial_transcript = []
     upload_audio_chunks: list[bytes] = []
     active_turn_task: asyncio.Task | None = None
 
-    async def start_turn(transcript: str) -> None:
-        """Queue turns in order; never cut off an answer already being spoken."""
+    async def start_turn(transcript: str, audio=None, language: str | None = None) -> None:
+        """Queue turns in order; never cut off an answer already being spoken.
+
+        *audio* is the preprocessed float32 array of the utterance (when the turn
+        came from real speech) so tone/prosody can drive the lead scores;
+        *language* is the STT-detected language so the reply can match it.
+        """
         nonlocal active_turn_task
         previous_turn = active_turn_task
 
@@ -158,7 +187,7 @@ async def voice_ws(
                     return
             await _trigger_voice_analysis(
                 conversation_id, tenant_id, interaction_id, transcript, websocket,
-                worker_type=worker_type, lead_id=lead_id,
+                worker_type=worker_type, lead_id=lead_id, audio=audio, language=language,
             )
 
         if previous_turn and not previous_turn.done():
@@ -179,6 +208,7 @@ async def voice_ws(
             if msg_type == "transcript_chunk":
                 text = raw.get("text", "")
                 is_final = raw.get("is_final", False)
+                typed_language = raw.get("language")
                 partial_transcript.append(text)
 
                 await manager.send_to(websocket, {
@@ -186,12 +216,13 @@ async def voice_ws(
                     "text": text,
                     "is_final": is_final,
                     "partial": " ".join(partial_transcript[-5:]),
+                    "language": typed_language,
                 })
 
                 if is_final:
                     full_text = " ".join(partial_transcript)
                     partial_transcript.clear()
-                    await start_turn(full_text)
+                    await start_turn(full_text, language=typed_language)
 
             elif msg_type == "upload_audio":
                 upload_audio_chunks.clear()
@@ -231,6 +262,7 @@ async def voice_ws(
                     logger.info("Saved raw audio to {}", _debug_path)
 
                 # Transcribe with configured STT provider
+                audio_np = None
                 try:
                     from app.analysis.pipelines.speech.preprocessing import SpeechPreprocessor
                     from app.config.settings import get_settings
@@ -249,10 +281,13 @@ async def voice_ws(
                     stt_started = time.perf_counter()
                     result = await asyncio.to_thread(ElevenLabsService.transcribe, audio_np, sr)
                     transcript = result["text"]
-                    logger.info("voice_latency stage=stt duration_ms={:.0f} conversation={}", (time.perf_counter() - stt_started) * 1000, conversation_id)
+                    # STT-detected spoken language, so the reply can match it.
+                    detected_language = result.get("language") or result.get("language_code")
+                    logger.info("voice_latency stage=stt duration_ms={:.0f} language={} conversation={}", (time.perf_counter() - stt_started) * 1000, detected_language, conversation_id)
                 except Exception as exc:
                     logger.error(f"Transcription failed: {exc}")
                     transcript = ""
+                    detected_language = None
 
                 if not transcript:
                     transcript = "[Could not transcribe this audio]"
@@ -263,8 +298,10 @@ async def voice_ws(
                     "text": transcript,
                     "is_final": True,
                     "partial": transcript,
+                    "language": detected_language,
                 })
-                await start_turn(transcript)
+                # Pass the real audio (tone) and detected language into the turn.
+                await start_turn(transcript, audio=audio_np, language=detected_language)
 
             elif msg_type == "voice_end":
                 full_transcript = " ".join(partial_transcript)
@@ -313,6 +350,8 @@ async def _trigger_voice_analysis(
     ws: WebSocket,
     worker_type: Optional[str] = None,
     lead_id: Optional[str] = None,
+    audio=None,
+    language: Optional[str] = None,
 ):
     """Run voice pipeline: filler, then a spoken reply, sentence by sentence.
 
@@ -337,11 +376,13 @@ async def _trigger_voice_analysis(
     """
     import time as _time
     _pipeline_start = _time.perf_counter()
+    from app.analysis.pipelines.language_service import LanguageService
+    normalized_language = LanguageService.normalize(language)
     # BANT/MEDDIC shares the CPU models with RAG.  Start it only after the
     # answer has been spoken so it can never increase call-answer latency.
     def start_background_bant() -> None:
         analysis_task = asyncio.create_task(
-            _run_analysis_and_notify(transcript, conversation_id, tenant_id, ws)
+            _run_analysis_and_notify(transcript, conversation_id, tenant_id, ws, audio=audio)
         )
 
         def _log_background_analysis(task: asyncio.Task) -> None:
@@ -357,12 +398,12 @@ async def _trigger_voice_analysis(
     # assistant's canned sales/greeting replies would otherwise preempt exactly
     # the buying-signal utterances (budget/demo/"ready to buy") an SDR or Sales
     # worker most needs to handle, silently swallowing the worker turn.
-    if not worker_type:
+    if not worker_type and normalized_language == "en":
         from app.analysis.services.quick_assistant_service import QuickAssistantService
         quick_answer = QuickAssistantService.maybe_answer(transcript)
         if quick_answer is not None:
             logger.info("stage=quick_assistant_hit duration_ms={:.0f}", (_time.perf_counter() - _pipeline_start) * 1000)
-            await _speak_answer(quick_answer, conversation_id, ws)
+            await _speak_answer(quick_answer, conversation_id, ws, language=normalized_language)
             start_background_bant()
             await manager.send_to(ws, {
                 "type": "analysis_triggered",
@@ -373,7 +414,9 @@ async def _trigger_voice_analysis(
 
     # 1. Generate filler immediately so the caller hears something right away
     t1 = _time.perf_counter()
-    filler = await generate_filler(transcript)
+    # The filler generator is currently English-only. Avoid mixing an English
+    # filler into a turn whose STT language is non-English.
+    filler = await generate_filler(transcript) if normalized_language == "en" else ""
     logger.info("stage=filler duration_ms={:.0f} text={}", (_time.perf_counter() - t1) * 1000, filler)
     if filler:
         await manager.send_to(ws, {
@@ -383,7 +426,7 @@ async def _trigger_voice_analysis(
         })
         await _speak_single_sentence(
             filler, conversation_id, ws, -1, False,
-            source="filler", pipeline_start=_pipeline_start,
+            source="filler", pipeline_start=_pipeline_start, language=normalized_language,
         )
 
     # 2. Produce the reply — via a dispatched worker if one was requested,
@@ -399,6 +442,7 @@ async def _trigger_voice_analysis(
                 worker_result = await run_worker(
                     worker_db, worker_type=normalized_worker, tenant_id=tenant_id,
                     text=transcript, lead_id=lead_id, session_id=conversation_id, channel="voice",
+                    response_language=normalized_language,
                 )
                 full_answer = worker_result.get("reply") or "I'm sorry, I don't have an answer for that right now."
                 logger.info(
@@ -411,7 +455,7 @@ async def _trigger_voice_analysis(
                     "conversation_id": conversation_id,
                     "data": {k: v for k, v in worker_result.items() if k not in ("sdr_result",)},
                 })
-                await _speak_answer(full_answer, conversation_id, ws)
+                await _speak_answer(full_answer, conversation_id, ws, language=normalized_language)
                 start_background_bant()
                 await manager.send_to(ws, {
                     "type": "analysis_triggered",
@@ -430,13 +474,16 @@ async def _trigger_voice_analysis(
 
     # 2b. Generic grounded answer (no worker requested, or worker dispatch failed).
     from app.services.rag.pipelines.chat import chat_pipeline
-    result = await chat_pipeline(question=transcript, tenant_id=tenant_id, session_id=conversation_id)
+    result = await chat_pipeline(
+        question=transcript, tenant_id=tenant_id, session_id=conversation_id,
+        response_language=normalized_language,
+    )
     full_answer = result.get("answer") or "I'm sorry, I don't have an answer for that right now."
     logger.info(
         "stage=chat_pipeline_complete duration_ms={:.0f} confidence={} supported={}",
         (_time.perf_counter() - t2) * 1000, result.get("confidence"), result.get("supported"),
     )
-    await _speak_answer(full_answer, conversation_id, ws)
+    await _speak_answer(full_answer, conversation_id, ws, language=normalized_language)
 
     logger.info("voice_latency stage=rag_retrieval elapsed_ms={:.0f} conversation={}", (_time.perf_counter() - _pipeline_start) * 1000, conversation_id)
 
@@ -464,6 +511,7 @@ async def _speak_single_sentence(
     is_last: bool,
     source: str = "answer",
     pipeline_start: float | None = None,
+    language: str | None = None,
 ):
     """TTS a single sentence and send audio via WebSocket."""
     text = _SPOKEN_SOURCE_RE.sub("", text).strip()
@@ -477,15 +525,16 @@ async def _speak_single_sentence(
     from app.analysis.pipelines.language_service import LanguageService
     settings = get_settings()
     t0 = _time.perf_counter()
+    ts_path: Path | None = None
     try:
         ts_path = Path(settings.TTS_OUTPUT_DIR) / f"reply_{conversation_id}_{uuid.uuid4().hex[:8]}.mp3"
-        language = LanguageService.detect(text)
-        voice_id = settings.ELEVENLABS_TAMIL_VOICE_ID if language == "ta" else None
+        spoken_language = LanguageService.normalize(language or LanguageService.detect(text))
+        voice_id = settings.ELEVENLABS_TAMIL_VOICE_ID if spoken_language == "ta" else None
         await asyncio.to_thread(
             ElevenLabsService.synthesize,
             text=text,
             destination=ts_path,
-            language=language,
+            language=spoken_language,
             voice_id=voice_id,
         )
         audio_b64 = base64.b64encode(ts_path.read_bytes()).decode()
@@ -506,9 +555,20 @@ async def _speak_single_sentence(
             logger.info("voice_latency stage={} elapsed_ms={:.0f} conversation={}", stage, (_time.perf_counter() - pipeline_start) * 1000, conversation_id)
     except Exception as exc:
         logger.error("stage=tts_sentence_error idx={} error={}", index, exc)
+    finally:
+        # TTS chunks are transported immediately over the socket; retaining a
+        # file per sentence would grow the local disk without adding evidence.
+        if ts_path is not None:
+            try:
+                ts_path.unlink(missing_ok=True)
+            except OSError as exc:
+                logger.warning("stage=tts_cleanup_error path={} error={}", ts_path, exc)
 
 
-async def _speak_answer(text: str, conversation_id: str, ws: WebSocket, max_sentence_len: int = 400):
+async def _speak_answer(
+    text: str, conversation_id: str, ws: WebSocket,
+    max_sentence_len: int = 400, language: str | None = None,
+):
     """Split *text* into sentences and TTS each one, sending audio to client incrementally."""
     import time as _time
     import re as _re
@@ -543,7 +603,10 @@ async def _speak_answer(text: str, conversation_id: str, ws: WebSocket, max_sent
     sentences = list(_chunk_sentences(text))
     logger.info("stage=tts_sentences count={} total_chars={}", len(sentences), len(text))
     for i, sentence in enumerate(sentences):
-        await _speak_single_sentence(sentence, conversation_id, ws, i, i == len(sentences) - 1)
+        await _speak_single_sentence(
+            sentence, conversation_id, ws, i, i == len(sentences) - 1,
+            language=language,
+        )
 
 
 async def _run_analysis_and_notify(
@@ -551,6 +614,7 @@ async def _run_analysis_and_notify(
     conversation_id: str,
     tenant_id: str,
     ws: WebSocket,
+    audio=None,
 ):
     """Run BANT/MEDDIC analysis in background; send WS update, then persist + publish.
 
@@ -568,9 +632,13 @@ async def _run_analysis_and_notify(
     try:
         from app.analysis.services.voice_analysis_pipeline import VoiceAnalysisPipeline
         VoiceAnalysisPipeline.initialize()
-        logger.info("=== VOICE_TRACE analysis_start")
+        logger.info("=== VOICE_TRACE analysis_start audio={}", "yes" if audio is not None else "no")
+        # Pass real audio so VoiceEmotionService and fusion run on the caller's
+        # tone. Relationship/composite confidence can use that signal while
+        # the other business metrics remain transcript/evidence based.
         analysis_result = await VoiceAnalysisPipeline.analyze(
             text=transcript,
+            audio=audio,
             conversation_id=conversation_id,
             tenant_id=tenant_id,
         )

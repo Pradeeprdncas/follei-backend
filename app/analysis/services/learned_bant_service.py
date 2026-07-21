@@ -90,7 +90,11 @@ class LearnedBANTService:
             "meddic": meddic_scores,
             "bant_overall": bant.get("overall_score"),
             "meddic_overall": meddic.get("overall_score"),
-            "source": "llm",
+            "source": (
+                "evidence_heuristic"
+                if bant.get("source") == "evidence_heuristic" or meddic.get("source") == "evidence_heuristic"
+                else "llm"
+            ),
         }
 
         # Persist only for real persisted conversations; demo IDs such as "demo" are not UUIDs.

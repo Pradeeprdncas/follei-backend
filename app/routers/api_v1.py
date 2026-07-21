@@ -7,7 +7,7 @@ from fastapi import APIRouter, Body, Depends, HTTPException, Query, Response, st
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
 from sqlalchemy import text
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.core.security import create_access_token, decode_access_token, hash_password, verify_password
@@ -282,37 +282,47 @@ def _current_user(
 
 
 def _permissions_for_user(db: Session, user_id: UUID) -> list[str]:
-    rows = db.execute(
-        text(
-            """
-            SELECT p.resource, p.action
-            FROM user_roles ur
-            JOIN role_permissions rp ON rp.role_id = ur.role_id
-            JOIN permissions p ON p.id = rp.permission_id
-            WHERE ur.user_id = :user_id
-            ORDER BY p.resource, p.action
-            """
-        ),
-        {"user_id": user_id},
-    )
-    permissions = [f"{row.resource}.{row.action}" for row in rows]
+    try:
+        rows = db.execute(
+            text(
+                """
+                SELECT p.resource, p.action
+                FROM user_roles ur
+                JOIN role_permissions rp ON rp.role_id = ur.role_id
+                JOIN permissions p ON p.id = rp.permission_id
+                WHERE ur.user_id = :user_id
+                ORDER BY p.resource, p.action
+                """
+            ),
+            {"user_id": user_id},
+        )
+        permissions = [f"{row.resource}.{row.action}" for row in rows]
+    except SQLAlchemyError:
+        # Older/local schemas use the canonical users.role column and do not
+        # have the optional normalized RBAC join tables yet.
+        db.rollback()
+        permissions = []
     return permissions or ["read", "write", "delete"]
 
 
 def _roles_for_user(db: Session, user_id: UUID, fallback: str | None = None) -> list[str]:
-    rows = db.execute(
-        text(
-            """
-            SELECT r.name
-            FROM user_roles ur
-            JOIN roles r ON r.id = ur.role_id
-            WHERE ur.user_id = :user_id
-            ORDER BY r.name
-            """
-        ),
-        {"user_id": user_id},
-    )
-    roles = [row.name for row in rows]
+    try:
+        rows = db.execute(
+            text(
+                """
+                SELECT r.name
+                FROM user_roles ur
+                JOIN roles r ON r.id = ur.role_id
+                WHERE ur.user_id = :user_id
+                ORDER BY r.name
+                """
+            ),
+            {"user_id": user_id},
+        )
+        roles = [row.name for row in rows]
+    except SQLAlchemyError:
+        db.rollback()
+        roles = []
     return roles or ([fallback] if fallback else [])
 
 

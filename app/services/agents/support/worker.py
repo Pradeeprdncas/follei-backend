@@ -39,7 +39,10 @@ def _mark_needs_human(db: Session, conversation_id: str, *, reason: str, detail:
     db.commit()
 
 
-async def handle_inbound_message(db: Session, *, tenant_id: str, text: str, session_id: str | None = None, channel: str = "email") -> dict[str, Any]:
+async def handle_inbound_message(
+    db: Session, *, tenant_id: str, text: str, session_id: str | None = None,
+    channel: str = "email", response_language: str | None = None,
+) -> dict[str, Any]:
     """Process one inbound support message end to end.
 
     Returns a dict describing what happened: whether the customer gets an
@@ -66,7 +69,10 @@ async def handle_inbound_message(db: Session, *, tenant_id: str, text: str, sess
             "reply": ESCALATION_ACK,
         }
 
-    result = await chat_pipeline(question=text, tenant_id=tenant_id, session_id=session_id)
+    result = await chat_pipeline(
+        question=text, tenant_id=tenant_id, session_id=session_id,
+        response_language=response_language,
+    )
     conversation_id = result.get("conversation_id")
 
     escalation_reason = None
