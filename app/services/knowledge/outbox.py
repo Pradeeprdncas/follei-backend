@@ -14,7 +14,7 @@ from app.config.database import SessionLocal
 from app.config.qdrant import get_qdrant
 from app.config.settings import get_settings
 from app.models.knowledge.sync_event import KnowledgeSyncEvent
-from app.services.knowledge.memory_store import upsert_document_memory, upsert_summary_memory
+from app.services.knowledge.memory_store import upsert_category_document_projection, upsert_document_memory, upsert_summary_memory
 from app.services.rag.embeddings.mistral import embed_texts
 from app.services.rag.vectorstore.insert import insert_chunks
 from app.services.rag.vectorstore.qdrant import ensure_collection
@@ -54,6 +54,15 @@ def enqueue_sync_event(
         KnowledgeSyncEvent.idempotency_key == idempotency_key,
     ).first()
     if existing:
+        if dict(existing.payload or {}) != dict(payload or {}):
+            existing.payload = dict(payload or {})
+            deliveries = dict(existing.deliveries or _deliveries(event_type))
+            for target in _TARGETS_BY_EVENT.get(event_type, ()):
+                deliveries[target] = "pending"
+            existing.deliveries = deliveries
+            existing.status = "pending"
+            existing.last_error = None
+            db.flush()
         return existing
     event = KnowledgeSyncEvent(
         tenant_id=tenant_uuid,
@@ -98,6 +107,14 @@ async def _ferret_document(event: KnowledgeSyncEvent) -> str:
         chunk_count=int(payload.get("chunk_count") or 0),
         source_uri=payload.get("source_uri"),
         previous_document_id=payload.get("previous_document_id"),
+        source_metadata=payload.get("source_metadata"),
+    )
+    upsert_category_document_projection(
+        tenant_id=str(event.tenant_id), document_id=str(event.aggregate_id),
+        document_version_id=payload.get("document_version_id"), workspace_id=payload.get("workspace_id"),
+        title=str(payload["title"]), primary_category=payload.get("primary_category") or payload.get("category"),
+        secondary_categories=list(payload.get("secondary_categories") or []), summary=str(payload.get("summary") or ""),
+        sections=list(payload.get("sections") or []), entities=list(payload.get("entities") or []), source_revision=int(payload.get("version") or 1), source_metadata=payload.get("source_metadata"),
     )
     return "completed"
 

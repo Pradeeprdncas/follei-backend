@@ -336,7 +336,11 @@ class LeadImportService:
             file_type=file_type,
             uploaded_by=uploaded_by,
         )
-        self.repo.db.flush()
+        # The upload endpoint returns this job ID and immediately performs a
+        # second request for its status. Persist the job before processing so
+        # it cannot disappear when the request-scoped session closes.
+        self.repo.db.commit()
+        self.repo.db.refresh(job)
 
         try:
             # Phase 2: Parse
@@ -453,17 +457,21 @@ class LeadImportService:
             job_stats = dict(job.statistics or {})
             job_stats["metrics"] = {"timings_seconds": timings, "total_seconds": sum(timings.values())}
             job.statistics = job_stats
-            self.repo.db.flush()
+            self.repo.db.commit()
+            self.repo.db.refresh(job)
             if progress_callback:
                 progress_callback(8, 1.0)
 
         except Exception as e:
             logger.exception("Lead import processing failed for job %s", job.id)
+            self.repo.db.rollback()
             self.repo.update_job_status(
                 job.id, ImportStatus.FAILED,
                 error_message=str(e)[:2000],
                 completed_at=None,
             )
+            self.repo.db.commit()
+            self.repo.db.refresh(job)
 
         return job
 
@@ -1220,6 +1228,18 @@ class LeadImportService:
         invalid_attempts = 0
         publisher = DomainEventPublisher(source="lead_import.service")
 
+        def persist_import_projection(lead: Lead, row: LeadImportRow, extracted: dict) -> None:
+            from app.services.knowledge.memory_store import upsert_lead_import_memory
+            # Retain the complete extracted projection in PostgreSQL as well as
+            # FerretDB. This is especially important for phone numbers because
+            # the legacy operational column is a signed 32-bit integer.
+            profile = dict(extracted)
+            lead.profile_data = {**(lead.profile_data or {}), **profile, "import_job_id": str(job.id), "import_row_id": str(row.id)}
+            upsert_lead_import_memory(
+                tenant_id=str(job.tenant_id), lead_id=str(lead.id), import_job_id=str(job.id),
+                record={"raw_data": row.raw_data or {}, "normalized_data": row.normalized_data or {}, "extracted_data": extracted},
+            )
+
         pre_duplicates = self.repo.count_rows_by_status(job_id, RowStatus.DUPLICATE)
         pre_conflicts = self.repo.count_rows_by_status(job_id, RowStatus.CONFLICT)
 
@@ -1252,6 +1272,7 @@ class LeadImportService:
                         except (ValueError, IndexError):
                             pass
                     self.repo.db.flush()
+                    persist_import_projection(existing, row, extracted)
                     self.repo.update_row(row.id, status=RowStatus.COMMITTED, lead_id=existing.id)
                     publisher.publish(EVENT_LEAD_CREATED, str(job.tenant_id), {
                         "lead_id": str(existing.id),
@@ -1263,17 +1284,20 @@ class LeadImportService:
                     imported += 1
                     continue
 
+            phone_digits = "".join(char for char in str(extracted.get("phone") or "") if char.isdigit())[:15]
+            phone_number = int(phone_digits) if phone_digits else 0
             lead = Lead(
                 tenant_id=job.tenant_id,
                 email=email,
                 first_name=(extracted.get("first_name") or "").strip() or None,
                 last_name=(extracted.get("last_name") or "").strip() or None,
                 company=(extracted.get("company") or "").strip() or None,
-                phone=extracted.get("phone") or "",
+                phone=phone_number if phone_number <= 2_147_483_647 else 0,
                 status="new",
             )
             self.repo.db.add(lead)
             self.repo.db.flush()
+            persist_import_projection(lead, row, extracted)
 
             self.repo.update_row(row.id, status=RowStatus.COMMITTED, lead_id=lead.id)
 
@@ -1288,6 +1312,7 @@ class LeadImportService:
 
         self.repo.update_job_status(job.id, ImportStatus.COMMITTED, completed_at=None)
         self.repo.update_job_statistics(job.id)
+        self.repo.db.commit()
 
         return {
             "job_id": str(job.id),

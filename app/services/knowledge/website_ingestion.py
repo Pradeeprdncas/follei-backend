@@ -4,6 +4,7 @@ from __future__ import annotations
 import ipaddress
 import socket
 from collections import deque
+from pathlib import Path
 from urllib.parse import urldefrag, urljoin, urlparse
 from urllib.robotparser import RobotFileParser
 
@@ -14,6 +15,7 @@ from bs4 import BeautifulSoup
 USER_AGENT = "FolleiKnowledgeBot/1.0"
 MAX_PAGE_BYTES = 1_000_000
 MAX_TOTAL_BYTES = 5_000_000
+DOWNLOADABLE_EXTENSIONS = {".pdf", ".docx", ".xlsx", ".xls", ".csv", ".ppt", ".pptx", ".txt", ".eml", ".msg"}
 
 
 class _PinnedResolver(AbstractResolver):
@@ -153,13 +155,16 @@ async def _crawl_rendered(url: str, *, max_pages: int, root_host: str, root_addr
     return pages
 
 
-async def crawl_website(url: str, *, max_pages: int = 25) -> list[dict]:
+async def crawl_website(url: str, *, max_pages: int = 25, include_assets: bool = False) -> list[dict]:
+    """Crawl HTML pages and, optionally, same-site documents within existing bounds."""
     max_pages = max(1, min(max_pages, 25))
     root_host = validate_public_url(url)
     root_addresses = _public_addresses(root_host)
     timeout = aiohttp.ClientTimeout(total=20, connect=5, sock_read=10)
     headers = {"User-Agent": USER_AGENT, "Accept": "text/html,application/xhtml+xml"}
     pages, seen, queue, total_bytes = [], set(), deque([urldefrag(url)[0]]), 0
+    assets: list[dict] = []
+    asset_urls: set[str] = set()
     connector = aiohttp.TCPConnector(resolver=_PinnedResolver(root_host, root_addresses))
     async with aiohttp.ClientSession(timeout=timeout, headers=headers, connector=connector) as session:
         robots = RobotFileParser()
@@ -198,9 +203,23 @@ async def crawl_website(url: str, *, max_pages: int = 25) -> list[dict]:
                             validate_public_url(link, expected_host=root_host)
                         except ValueError:
                             continue
-                        if link not in seen:
+                        suffix = Path(urlparse(link).path).suffix.lower()
+                        if include_assets and suffix in DOWNLOADABLE_EXTENSIONS and link not in asset_urls:
+                            asset_urls.add(link)
+                            try:
+                                async with session.get(link, allow_redirects=False) as asset_response:
+                                    content_type = asset_response.headers.get("Content-Type", "").lower()
+                                    if asset_response.status == 200 and "text/html" not in content_type:
+                                        content = await asset_response.content.read(MAX_PAGE_BYTES + 1)
+                                        if len(content) <= MAX_PAGE_BYTES and total_bytes + len(content) <= MAX_TOTAL_BYTES:
+                                            total_bytes += len(content)
+                                            assets.append({"url": link, "title": Path(urlparse(link).path).name or "website-asset", "filename": Path(urlparse(link).path).name or f"website-asset{suffix}", "file_type": suffix.lstrip("."), "content": content})
+                            except (aiohttp.ClientError, TimeoutError):
+                                pass
+                        elif link not in seen:
                             queue.append(link)
                     break
     if pages:
-        return pages
-    return await _crawl_rendered(url, max_pages=max_pages, root_host=root_host, root_addresses=root_addresses, robots=robots)
+        return pages + assets
+    rendered = await _crawl_rendered(url, max_pages=max_pages, root_host=root_host, root_addresses=root_addresses, robots=robots)
+    return rendered + assets

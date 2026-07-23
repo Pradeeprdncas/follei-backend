@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 
 from app.config.settings import get_settings
 from app.models.knowledge.fact_draft import BusinessFactDraft
+from app.services.knowledge.categories import fact_type_for_category
 
 FACT_TYPES = {
     "product", "service", "pricing", "plan", "policy", "sla", "faq", "competitor",
@@ -81,7 +82,7 @@ def _fallback_facts(document: Any, chunks: list[Any]) -> list[dict[str, Any]]:
     """
     if not chunks:
         return []
-    category = (document.category or "general").lower()
+    category = fact_type_for_category((getattr(document, "primary_category", None) or document.category or "general").lower())
     # Mixed commercial documents commonly contain policy, price, plan, and FAQ
     # sections.  Produce conservative, directly quoted drafts for each signal
     # instead of letting a single target category hide the rest.

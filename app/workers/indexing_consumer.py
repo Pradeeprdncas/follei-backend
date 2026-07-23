@@ -71,6 +71,9 @@ class IndexingWorker:
                             original_filename=data.get("filename"),
                             uploaded_by=data.get("uploaded_by"),
                             category_override=data.get("category"),
+                            workspace_id=data.get("workspace_id"),
+                            processing_instructions=data.get("processing_instructions"),
+                            source_metadata=data.get("source_metadata"),
                             return_details=True,
                         ))
                     if job:

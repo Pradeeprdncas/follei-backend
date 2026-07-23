@@ -5,7 +5,7 @@ from app.config.settings import get_settings
 from loguru import logger
 
 _settings = get_settings()
-_FILTER_FIELDS = ("tenant_id", "approval_status", "document_id", "source_type", "sensitivity")
+_FILTER_FIELDS = ("tenant_id", "workspace_id", "approval_status", "document_id", "document_version_id", "section_id", "source_type", "sensitivity", "primary_category", "detected_category")
 
 
 def ensure_collection() -> None:

@@ -43,6 +43,12 @@ class Document(Base):
     content_hash = Column(String(64), nullable=True, index=True)  # SHA256 for idempotency
     # Canonical cross-source lifecycle fields. Added additively by Alembic.
     category = Column(String(40), nullable=True, index=True)
+    primary_category = Column(String(40), nullable=True, index=True)
+    secondary_categories = Column(JSON, default=list, nullable=False)
+    workspace_id = Column(Uuid(as_uuid=True), nullable=True, index=True)
+    processing_instructions = Column(Text, nullable=True)
+    extractor_version = Column(String(64), nullable=True)
+    chunker_version = Column(String(64), nullable=True)
     version = Column(Integer, nullable=False, default=1)
     previous_document_id = Column(Uuid(as_uuid=True), ForeignKey("documents.id", ondelete="SET NULL"), nullable=True, index=True)
     sensitivity = Column(String(32), nullable=False, default="internal")
@@ -64,6 +70,7 @@ class Document(Base):
     tenant = relationship("Tenant", back_populates="documents")
     source = relationship("KnowledgeSource", back_populates="documents")
     chunks = relationship("DocumentChunk", back_populates="document", cascade="all, delete-orphan")
+    sections = relationship("DocumentSection", back_populates="document", cascade="all, delete-orphan")
     pages = relationship("DocumentPage", back_populates="document", cascade="all, delete-orphan")
     versions = relationship("DocumentVersion", back_populates="document", cascade="all, delete-orphan")
     conversation_citations = relationship("ConversationCitation", back_populates="document")
@@ -129,6 +136,10 @@ class DocumentChunk(Base):
     id = Column(Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4, index=True)
     tenant_id = Column(Uuid(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False, index=True)
     document_id = Column(Uuid(as_uuid=True), ForeignKey("documents.id", ondelete="CASCADE"), nullable=False, index=True)
+    document_version_id = Column(Uuid(as_uuid=True), ForeignKey("document_versions.id", ondelete="SET NULL"), nullable=True, index=True)
+    section_id = Column(Uuid(as_uuid=True), ForeignKey("document_sections.id", ondelete="SET NULL"), nullable=True, index=True)
+    primary_category = Column(String(40), nullable=True, index=True)
+    detected_category = Column(String(40), nullable=True, index=True)
     chunk_index = Column(Integer, nullable=False)
     content = Column(Text, nullable=False)
     token_count = Column(Integer, nullable=True)
@@ -138,6 +149,7 @@ class DocumentChunk(Base):
 
     tenant = relationship("Tenant")
     document = relationship("Document", back_populates="chunks")
+    section_record = relationship("DocumentSection", back_populates="chunks")
     citations = relationship("ChunkCitation", back_populates="chunk", cascade="all, delete-orphan")
     embeddings = relationship("ChunkEmbedding", back_populates="chunk", cascade="all, delete-orphan")
     conversation_citations = relationship("ConversationCitation", back_populates="chunk")
@@ -317,6 +329,29 @@ class DocumentVersion(Base):
 
     tenant = relationship("Tenant")
     document = relationship("Document", back_populates="versions")
+
+
+class DocumentSection(Base):
+    """Ordered canonical section envelope; tenant-specific content stays JSON/text."""
+    __tablename__ = "document_sections"
+
+    id = Column(Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id = Column(Uuid(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False, index=True)
+    document_id = Column(Uuid(as_uuid=True), ForeignKey("documents.id", ondelete="CASCADE"), nullable=False, index=True)
+    document_version_id = Column(Uuid(as_uuid=True), ForeignKey("document_versions.id", ondelete="SET NULL"), nullable=True, index=True)
+    section_order = Column(Integer, nullable=False)
+    title = Column(String, nullable=True)
+    category = Column(String(40), nullable=True, index=True)
+    section_type = Column(String(64), nullable=True)
+    page_start = Column(Integer, nullable=True)
+    page_end = Column(Integer, nullable=True)
+    content = Column(Text, nullable=True)
+    summary = Column(Text, nullable=True)
+    metadata_ = Column("metadata", JSON, default=dict, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    document = relationship("Document", back_populates="sections")
+    chunks = relationship("DocumentChunk", back_populates="section_record")
 
 
 class ChunkCitation(Base):

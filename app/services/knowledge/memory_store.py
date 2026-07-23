@@ -77,6 +77,7 @@ def upsert_document_memory(
     chunk_count: int,
     source_uri: str | None = None,
     previous_document_id: str | None = None,
+    source_metadata: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Write the clean long-term-memory projection for one indexed document.
 
@@ -98,11 +99,47 @@ def upsert_document_memory(
         "chunk_count": int(chunk_count),
         "source_uri": str(source_uri) if source_uri else None,
         "previous_document_id": str(previous_document_id) if previous_document_id else None,
+        "source_metadata": dict(source_metadata or {}),
+        "lead_ids": [str(value) for value in (source_metadata or {}).get("lead_ids", [])],
+        "lead_import_job_ids": [str(value) for value in (source_metadata or {}).get("lead_import_job_ids", [])],
+        "lead_import_row_ids": [str(value) for value in (source_metadata or {}).get("lead_import_row_ids", [])],
         "projection_type": "indexed_document_summary",
         "canonical_store": "postgres",
         "semantic_store": "qdrant",
         "updated_at": _now(),
     }
+    collection.replace_one(key, document, upsert=True)
+    return document
+
+
+def upsert_category_document_projection(*, tenant_id: str, document_id: str, document_version_id: str | None, workspace_id: str | None, title: str, primary_category: str | None, secondary_categories: list[str], summary: str, sections: list[dict[str, Any]], entities: list[dict[str, Any]], source_revision: int, source_metadata: dict[str, Any] | None = None) -> None:
+    """Write rebuildable ordered document/entity projections from outbox data."""
+    database = get_context_database()
+    key = {"tenant_id": str(tenant_id), "document_id": str(document_id)}
+    metadata = dict(source_metadata or {})
+    database["knowledge_document_views"].replace_one(key, {**key, "document_version_id": document_version_id, "workspace_id": workspace_id, "title": title, "primary_category": primary_category, "secondary_categories": secondary_categories, "summary": summary, "status": "processed", "sections": sections, "source_metadata": metadata, "lead_ids": [str(value) for value in metadata.get("lead_ids", [])], "lead_import_job_ids": [str(value) for value in metadata.get("lead_import_job_ids", [])], "lead_import_row_ids": [str(value) for value in metadata.get("lead_import_row_ids", [])], "sync": {"source_revision": source_revision, "projection_version": 1, "projected_at": _now()}}, upsert=True)
+    collection = database["knowledge_entities"]
+    for entity in entities:
+        entity_key = {"tenant_id": str(tenant_id), "entity_id": str(entity["entity_id"])}
+        collection.replace_one(entity_key, {**entity_key, "workspace_id": workspace_id, "document_id": str(document_id), "document_version_id": document_version_id, **entity, "metadata": {"source_revision": source_revision, "projection_version": 1, "projected_at": _now()}}, upsert=True)
+
+
+def upsert_lead_import_memory(*, tenant_id: str, lead_id: str, import_job_id: str | None, record: dict[str, Any]) -> dict[str, Any]:
+    """Persist the complete imported record as tenant-scoped lead memory.
+
+    Postgres keeps the operational lead fields; this projection deliberately
+    retains unmapped columns and provenance so no CSV/document information is
+    silently discarded during normalization.
+    """
+    collection = get_context_database()["lead_import_memory"]
+    key = {"tenant_id": str(tenant_id), "lead_id": str(lead_id)}
+    existing = collection.find_one(key, {"_id": 0}) or {}
+    now = _now()
+    imports = list(existing.get("imports", []))
+    source = {"import_job_id": str(import_job_id) if import_job_id else None, "record": record, "stored_at": now}
+    if not any(item.get("import_job_id") == source["import_job_id"] for item in imports):
+        imports.append(source)
+    document = {**existing, **key, "projection_type": "lead_import_raw_record", "canonical_store": "postgres", "imports": imports[-20:], "latest_record": record, "updated_at": now}
     collection.replace_one(key, document, upsert=True)
     return document
 

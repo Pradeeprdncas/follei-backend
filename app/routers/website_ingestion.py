@@ -33,10 +33,12 @@ async def ingest_website(payload: WebsiteIngestRequest, db: Session = Depends(ge
     if category and category not in TARGET_CATEGORIES:
         raise HTTPException(status_code=422, detail="Unknown target category")
     try:
-        pages = await crawl_website(str(payload.url), max_pages=payload.max_pages)
+        sources = await crawl_website(str(payload.url), max_pages=payload.max_pages, include_assets=True)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    if not pages:
+    pages = [source for source in sources if "content" not in source]
+    assets = [source for source in sources if "content" in source]
+    if not pages and not assets:
         raise HTTPException(status_code=422, detail="No crawlable text pages were found")
     job_id = uuid4()
     path = Path(UPLOAD_DIR) / f"{job_id}.txt"
@@ -54,4 +56,18 @@ async def ingest_website(payload: WebsiteIngestRequest, db: Session = Depends(ge
     except Exception as exc:
         job.status = "failed"; job.last_error = f"queue: {exc}"[:4000]; db.commit()
         raise HTTPException(status_code=503, detail="Website was crawled but indexing could not be queued") from exc
-    return {"job_id": str(job_id), "status": "queued", "source_uri": str(payload.url), "pages_crawled": len(pages), "disposition": "pending"}
+    asset_job_ids: list[str] = []
+    for asset in assets:
+        asset_job_id = uuid4()
+        asset_path = Path(UPLOAD_DIR) / f"{asset_job_id}.{asset['file_type']}"
+        asset_path.write_bytes(asset["content"])
+        try:
+            asset_key = store_source(asset_path, tenant_id=tenant_id, job_id=str(asset_job_id))
+            asset_message = {"job_id": str(asset_job_id), "tenant_id": tenant_id, "file_path": str(asset_path), "filename": asset["filename"], "source_uri": asset["url"], "uploaded_by": "website_ingestion", "file_type": asset["file_type"], "category": category, "object_key": asset_key}
+            db.add(IndexingJob(id=asset_job_id, tenant_id=UUID(tenant_id), status="queued", payload=asset_message))
+            ensure_topics(); producer = get_producer(); producer.send(_settings.KAFKA_TOPIC_INDEXING, key=str(asset_job_id), value=asset_message); producer.flush()
+            asset_job_ids.append(str(asset_job_id))
+        except Exception:
+            db.add(IndexingJob(id=asset_job_id, tenant_id=UUID(tenant_id), status="failed", payload={"source_uri": asset["url"]}, last_error="website asset could not be queued"))
+    db.commit()
+    return {"job_id": str(job_id), "asset_job_ids": asset_job_ids, "status": "queued", "source_uri": str(payload.url), "pages_crawled": len(pages), "assets_discovered": len(assets), "disposition": "pending"}

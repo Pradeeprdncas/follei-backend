@@ -8,6 +8,7 @@ Preview: POST /leads/import/preview — dry-run preview
 import csv
 import io
 import os
+import re
 import tempfile
 from uuid import UUID, uuid4
 
@@ -34,9 +35,31 @@ from app.domains.lead_import.constants import FileType
 from app.domains.lead_import.utils import detect_file_type
 from app.domains.lead_import.validators import validate_lead_row, is_blank_row
 from app.models.leads.lead import Lead
+from app.domains.lead_import.models import LeadImportJob
 from app.domains.lead_import.utils import split_full_name, normalize_email, normalize_phone, normalize_website
+from app.models.knowledge.indexing_job import IndexingJob
+from app.routers.upload import UPLOAD_DIR
+from app.services.knowledge.object_storage import store_source
+from app.services.knowledge.website_ingestion import crawl_website
+from app.config.kafka import ensure_topics, get_producer
+from app.config.settings import get_settings
+from app.core.security import get_authenticated_tenant_id, require_matching_tenant
+from app.config.ferretdb import get_context_database
 
 router = APIRouter(prefix="/leads/import", tags=["Lead Import"])
+_settings = get_settings()
+_URL_PATTERN = re.compile(r"https?://[^\s<>\"']+", re.IGNORECASE)
+
+
+def _owned_job(db: Session, job_id: str, tenant_id: str) -> LeadImportJob:
+    """Return an import job only when it belongs to the JWT tenant."""
+    try:
+        job = db.get(LeadImportJob, UUID(job_id))
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail="Import job not found") from exc
+    if not job or str(job.tenant_id) != str(tenant_id):
+        raise HTTPException(status_code=404, detail="Import job not found")
+    return job
 
 # ── Header normalisation map ─────────────────────────────────────
 # Maps CSV column name variants → canonical field names
@@ -133,10 +156,16 @@ def _write_lead(db, tenant_id, row: dict) -> dict:
         last_name=last_name.strip() or None,
         company=(row.get("company") or "").strip() or None,
         phone=phone_int,
+        profile_data={key: value for key, value in row.items() if key not in {"email", "first_name", "last_name", "full_name", "company", "phone"}},
         status="new",
     )
     db.add(lead)
     db.flush()
+    from app.services.knowledge.memory_store import upsert_lead_import_memory
+    upsert_lead_import_memory(
+        tenant_id=str(tenant_id), lead_id=str(lead.id), import_job_id=None,
+        record={"raw_data": row, "normalized_data": row, "extracted_data": row},
+    )
     return {"action": "created", "lead_id": str(lead.id)}
 
 
@@ -167,6 +196,8 @@ async def import_leads(
     tenant_id: str = Form(...),
     file: UploadFile = File(...),
     run_ai: bool = Form(False),
+    db: Session = Depends(get_db),
+    authenticated_tenant_id: str = Depends(get_authenticated_tenant_id),
 ):
     """Import leads from CSV directly — no job, no LLM.
 
@@ -192,14 +223,13 @@ async def import_leads(
             detail=f"CSV has {len(rows)} rows (max 1000 for sync import). Use POST /leads/import/async for large files."
         )
 
-    db = next(get_db())
+    require_matching_tenant(tenant_id, authenticated_tenant_id)
     try:
         tenant_uuid = UUID(tenant_id)
     except ValueError:
         raise HTTPException(status_code=400, detail="Invalid tenant_id")
 
     results: list[dict] = []
-    db = next(get_db())
     try:
         for i, row in enumerate(rows):
             result = _write_lead(db, tenant_uuid, row)
@@ -235,8 +265,9 @@ async def import_leads(
                 logger.warning("AI enrichment failed (non-fatal): %s", e)
 
         return ImportResult(created=created, duplicates=duplicates, skipped=skipped, total=len(rows), errors=errors)
-    finally:
-        db.close()
+    except Exception:
+        db.rollback()
+        raise
 
 
 # ── POST /leads/import/preview — dry run ─────────────────────────
@@ -279,11 +310,13 @@ async def import_leads_async(
     tenant_id: str = Form(...),
     file: UploadFile = File(...),
     service: LeadImportService = Depends(get_service),
+    authenticated_tenant_id: str = Depends(get_authenticated_tenant_id),
 ):
     """Upload a large CSV for async processing (>1000 rows). Creates a background job."""
     if not file.filename:
         raise HTTPException(status_code=400, detail="No file provided")
 
+    require_matching_tenant(tenant_id, authenticated_tenant_id)
     try:
         file_type = detect_file_type(file.filename)
     except ValueError as e:
@@ -317,15 +350,160 @@ async def import_leads_async(
             pass
 
 
+@router.post("/upload", response_model=LeadImportUploadResponse, status_code=201)
+async def import_leads_from_file(
+    tenant_id: str = Form(...),
+    file: UploadFile = File(...),
+    service: LeadImportService = Depends(get_service),
+    authenticated_tenant_id: str = Depends(get_authenticated_tenant_id),
+):
+    """Import leads from CSV, Excel, PDF, DOCX, text, or supported images.
+
+    The returned job exposes review/commit endpoints.  Commit writes the
+    normalized operational record to PostgreSQL and the complete extracted
+    source record to tenant-scoped FerretDB memory.
+    """
+    return await import_leads_async(
+        tenant_id=tenant_id,
+        file=file,
+        service=service,
+        authenticated_tenant_id=authenticated_tenant_id,
+    )
+
+
+@router.post("/{job_id}/crawl-links")
+async def crawl_imported_lead_links(
+    job_id: str,
+    confirm_authorized: bool = False,
+    db: Session = Depends(get_db),
+    authenticated_tenant_id: str = Depends(get_authenticated_tenant_id),
+):
+    """Crawl URLs found in committed lead records and queue their knowledge ingestion.
+
+    Each lead URL produces a normal indexing job, so parsed text is persisted
+    through the established PostgreSQL, Qdrant, and FerretDB pipeline instead
+    of creating a lead-import-only data silo.
+    """
+    if not confirm_authorized:
+        raise HTTPException(status_code=422, detail="Website ownership or crawl authorization must be confirmed")
+    job = _owned_job(db, job_id, authenticated_tenant_id)
+    rows = LeadImportRepository(db).get_rows_by_job(job.id, status="committed")
+    url_provenance: dict[str, dict[str, set[str]]] = {}
+    for row in rows:
+        for value in (row.raw_data or {}, row.normalized_data or {}, row.extracted_data or {}):
+            for match in _URL_PATTERN.findall(str(value)):
+                url = match.rstrip(".,;)")
+                provenance = url_provenance.setdefault(url, {"lead_ids": set(), "lead_import_row_ids": set()})
+                if row.lead_id:
+                    provenance["lead_ids"].add(str(row.lead_id))
+                provenance["lead_import_row_ids"].add(str(row.id))
+    queued: list[dict] = []
+    failures: list[dict] = []
+    for url, provenance in sorted(url_provenance.items()):
+        try:
+            source_metadata = {
+                "lead_ids": sorted(provenance["lead_ids"]),
+                "lead_import_row_ids": sorted(provenance["lead_import_row_ids"]),
+                "lead_import_job_ids": [str(job.id)],
+                "ingestion_origin": "lead_import_link_crawl",
+            }
+            sources = await crawl_website(url, max_pages=10, include_assets=True)
+            pages = [source for source in sources if "content" not in source]
+            if not pages:
+                continue
+            index_job_id = uuid4()
+            path = os.path.join(str(UPLOAD_DIR), f"lead-url-{index_job_id}.txt")
+            with open(path, "w", encoding="utf-8") as handle:
+                handle.write("\n\n".join(f"# {page['title']}\nSource URL: {page['url']}\n{page['text']}" for page in pages))
+            object_key = store_source(path, tenant_id=str(job.tenant_id), job_id=str(index_job_id))
+            payload = {"job_id": str(index_job_id), "tenant_id": str(job.tenant_id), "file_path": path, "filename": f"lead-url-{index_job_id}.txt", "source_uri": url, "uploaded_by": "lead_import_link_crawl", "file_type": "txt", "category": None, "object_key": object_key, "lead_import_job_id": str(job.id), "lead_ids": source_metadata["lead_ids"], "source_metadata": source_metadata}
+            db.add(IndexingJob(id=index_job_id, tenant_id=job.tenant_id, status="queued", payload=payload))
+            ensure_topics(); producer = get_producer(); producer.send(_settings.KAFKA_TOPIC_INDEXING, key=str(index_job_id), value=payload); producer.flush()
+            for asset in (source for source in sources if "content" in source):
+                asset_job_id = uuid4()
+                asset_path = os.path.join(str(UPLOAD_DIR), f"lead-url-{asset_job_id}.{asset['file_type']}")
+                with open(asset_path, "wb") as handle:
+                    handle.write(asset["content"])
+                asset_key = store_source(asset_path, tenant_id=str(job.tenant_id), job_id=str(asset_job_id))
+                asset_payload = {"job_id": str(asset_job_id), "tenant_id": str(job.tenant_id), "file_path": asset_path, "filename": asset["filename"], "source_uri": asset["url"], "uploaded_by": "lead_import_link_crawl", "file_type": asset["file_type"], "category": None, "object_key": asset_key, "lead_import_job_id": str(job.id), "lead_ids": source_metadata["lead_ids"], "source_metadata": source_metadata}
+                db.add(IndexingJob(id=asset_job_id, tenant_id=job.tenant_id, status="queued", payload=asset_payload))
+                producer.send(_settings.KAFKA_TOPIC_INDEXING, key=str(asset_job_id), value=asset_payload)
+            producer.flush()
+            queued.append({"url": url, "job_id": str(index_job_id), "lead_ids": source_metadata["lead_ids"], "pages": len(pages), "assets_discovered": len(sources) - len(pages)})
+        except Exception as exc:
+            failures.append({"url": url, "error": str(exc)[:300]})
+    db.commit()
+    return {"import_job_id": str(job.id), "urls_found": len(url_provenance), "queued": queued, "failures": failures}
+
+
 # ── Existing job routes (kept for backward compat) ───────────────
 
+@router.get("/{job_id}/storage-verification")
+def verify_lead_import_storage(
+    job_id: str,
+    db: Session = Depends(get_db),
+    authenticated_tenant_id: str = Depends(get_authenticated_tenant_id),
+):
+    """Verify canonical leads, full import memory, and crawled memory for one job."""
+    job = _owned_job(db, job_id, authenticated_tenant_id)
+    rows = LeadImportRepository(db).get_rows_by_job(job.id)
+    committed_rows = [row for row in rows if row.status == "committed" and row.lead_id]
+    lead_ids = sorted({str(row.lead_id) for row in committed_rows})
+    crawl_jobs = [
+        item
+        for item in db.query(IndexingJob).filter(IndexingJob.tenant_id == job.tenant_id).all()
+        if str((item.payload or {}).get("lead_import_job_id") or "") == str(job.id)
+    ]
+    document_ids = sorted({str(item.document_id) for item in crawl_jobs if item.document_id})
+    ferret_error = None
+    raw_memory_count = 0
+    crawled_memory_count = 0
+    crawled_view_count = 0
+    try:
+        context = get_context_database()
+        if lead_ids:
+            raw_memory_count = context["lead_import_memory"].count_documents(
+                {"tenant_id": str(job.tenant_id), "lead_id": {"$in": lead_ids}}
+            )
+        crawled_memory_count = context["knowledge_document_memory"].count_documents(
+            {"tenant_id": str(job.tenant_id), "lead_import_job_ids": str(job.id)}
+        )
+        crawled_view_count = context["knowledge_document_views"].count_documents(
+            {"tenant_id": str(job.tenant_id), "lead_import_job_ids": str(job.id)}
+        )
+    except Exception as exc:
+        ferret_error = f"{type(exc).__name__}: {exc}"
+    return {
+        "job_id": str(job.id),
+        "status": job.status,
+        "postgres": {
+            "source_rows": len(rows),
+            "committed_rows": len(committed_rows),
+            "linked_lead_ids": lead_ids,
+            "crawl_jobs": len(crawl_jobs),
+            "indexed_crawl_documents": len(document_ids),
+            "crawl_document_ids": document_ids,
+        },
+        "ferretdb": {
+            "raw_lead_memories": raw_memory_count,
+            "crawled_document_memories": crawled_memory_count,
+            "crawled_document_views": crawled_view_count,
+            "error": ferret_error,
+        },
+        "consistent": ferret_error is None and raw_memory_count == len(lead_ids),
+        "crawl_projection_complete": bool(crawl_jobs) and len(document_ids) == crawled_memory_count == crawled_view_count,
+    }
+
+
 @router.get("/{job_id}", response_model=LeadImportJobResponse)
-def get_job_status(job_id: str, db: Session = Depends(get_db)):
+def get_job_status(
+    job_id: str,
+    db: Session = Depends(get_db),
+    authenticated_tenant_id: str = Depends(get_authenticated_tenant_id),
+):
     """Get the status and progress of a lead import job."""
     repo = LeadImportRepository(db)
-    job = repo.get_job(UUID(job_id))
-    if not job:
-        raise HTTPException(status_code=404, detail=f"Import job not found: {job_id}")
+    job = _owned_job(db, job_id, authenticated_tenant_id)
 
     return LeadImportJobResponse(
         id=str(job.id),
@@ -347,8 +525,13 @@ def get_job_status(job_id: str, db: Session = Depends(get_db)):
 
 
 @router.get("/{job_id}/preview", response_model=LeadImportPreviewResponse)
-def get_preview(job_id: str, service: LeadImportService = Depends(get_service)):
+def get_preview(
+    job_id: str,
+    service: LeadImportService = Depends(get_service),
+    authenticated_tenant_id: str = Depends(get_authenticated_tenant_id),
+):
     """Preview extracted leads before committing."""
+    _owned_job(service.repo.db, job_id, authenticated_tenant_id)
     try:
         preview = service.get_preview(UUID(job_id))
         return LeadImportPreviewResponse(**preview)
@@ -359,8 +542,13 @@ def get_preview(job_id: str, service: LeadImportService = Depends(get_service)):
 
 
 @router.post("/{job_id}/commit", response_model=LeadImportCommitResponse)
-def commit_import(job_id: str, service: LeadImportService = Depends(get_service)):
+def commit_import(
+    job_id: str,
+    service: LeadImportService = Depends(get_service),
+    authenticated_tenant_id: str = Depends(get_authenticated_tenant_id),
+):
     """Commit selected rows from the import into the Lead table."""
+    _owned_job(service.repo.db, job_id, authenticated_tenant_id)
     try:
         result = service.commit(UUID(job_id))
         return LeadImportCommitResponse(**result)
@@ -371,8 +559,15 @@ def commit_import(job_id: str, service: LeadImportService = Depends(get_service)
 
 
 @router.put("/{job_id}/rows/{row_id}")
-def update_row(job_id: str, row_id: str, body: RowUpdateRequest, service: LeadImportService = Depends(get_service)):
+def update_row(
+    job_id: str,
+    row_id: str,
+    body: RowUpdateRequest,
+    service: LeadImportService = Depends(get_service),
+    authenticated_tenant_id: str = Depends(get_authenticated_tenant_id),
+):
     """Edit a single row's extracted data before committing."""
+    _owned_job(service.repo.db, job_id, authenticated_tenant_id)
     try:
         result = service.update_row_data(UUID(row_id), body.updates)
         if result is None:
@@ -383,8 +578,14 @@ def update_row(job_id: str, row_id: str, body: RowUpdateRequest, service: LeadIm
 
 
 @router.post("/{job_id}/rows/{row_id}/ignore")
-def ignore_row(job_id: str, row_id: str, service: LeadImportService = Depends(get_service)):
+def ignore_row(
+    job_id: str,
+    row_id: str,
+    service: LeadImportService = Depends(get_service),
+    authenticated_tenant_id: str = Depends(get_authenticated_tenant_id),
+):
     """Mark a single row as ignored/skipped."""
+    _owned_job(service.repo.db, job_id, authenticated_tenant_id)
     try:
         result = service.ignore_row(UUID(row_id))
         if result is None:
@@ -395,8 +596,14 @@ def ignore_row(job_id: str, row_id: str, service: LeadImportService = Depends(ge
 
 
 @router.post("/{job_id}/bulk", response_model=BulkActionResponse)
-def bulk_action(job_id: str, body: BulkActionRequest, service: LeadImportService = Depends(get_service)):
+def bulk_action(
+    job_id: str,
+    body: BulkActionRequest,
+    service: LeadImportService = Depends(get_service),
+    authenticated_tenant_id: str = Depends(get_authenticated_tenant_id),
+):
     """Perform a bulk action (ignore/reset/spam/select/deselect) on multiple rows."""
+    _owned_job(service.repo.db, job_id, authenticated_tenant_id)
     try:
         result = service.bulk_action(UUID(job_id), body.action, body.row_ids)
         return BulkActionResponse(**result)

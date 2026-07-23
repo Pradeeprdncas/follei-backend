@@ -27,7 +27,7 @@ async def retrieve_dense(query: str, tenant_id: str, top_k: int = 5, category: s
             query=query_vector,  # Modern parameter accepts raw list[float]
             limit=top_k,
             # Filter matches by user tenancy boundary if applicable
-            query_filter=approved_filter(tenant_id) if tenant_id else None
+            query_filter={"must": [*(approved_filter(tenant_id)["must"] if tenant_id else []), *([{ "key": "primary_category", "match": {"value": category}}] if category else [])]}
         )
 
         # 3. Formulate standard chunk dictionaries from ScoredPoints list
@@ -46,6 +46,9 @@ async def retrieve_dense(query: str, tenant_id: str, top_k: int = 5, category: s
                 "source_type": payload.get("source_type"),
                 "sensitivity": payload.get("sensitivity"),
                 "document_id": payload.get("document_id"),
+                "document_version_id": payload.get("document_version_id"),
+                "section_id": payload.get("section_id"),
+                "primary_category": payload.get("primary_category") or payload.get("category"),
                 "tenant_id": payload.get("tenant_id")
             })
 

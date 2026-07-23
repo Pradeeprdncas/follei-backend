@@ -1,6 +1,7 @@
 import uuid
 from datetime import datetime
 from sqlalchemy import Column, String, DateTime, ForeignKey, Integer, Float, Uuid
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import relationship
 
 from app.database.base import Base
@@ -31,6 +32,9 @@ class Lead(Base):
     status = Column(String, default="new") # 'new', 'qualified', 'disqualified', 'converted'
     revenue_score = Column(Integer, default=0)
     phone = Column(Integer, default=0)
+    # Structured import fields that do not belong in the narrow operational CRM
+    # columns (website, LinkedIn, title, location, source provenance, etc.).
+    profile_data = Column(JSONB, nullable=True)
 
     # Lead temperature
     current_temperature = Column(String, default="cold", nullable=False)

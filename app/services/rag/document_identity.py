@@ -27,6 +27,8 @@ def stable_upload_uri(tenant_id: str, filename: str) -> str:
 def reserve_document(
     *, db: Session, tenant_id: str, file_path: str | Path, source_uri: str,
     filename: str, source_type: str, uploaded_by: str | None = None,
+    workspace_id: str | None = None, processing_instructions: str | None = None,
+    source_metadata: dict | None = None,
 ) -> tuple[Document, bool]:
     """Return (document, is_duplicate); changed content becomes a linked version."""
     content_hash = sha256_file(file_path)
@@ -36,6 +38,18 @@ def reserve_document(
         .first()
     )
     if duplicate:
+        if source_metadata:
+            metadata = dict(duplicate.metadata_ or {})
+            for list_key in ("lead_ids", "lead_import_row_ids", "lead_import_job_ids"):
+                merged = {str(value) for value in metadata.get(list_key, [])}
+                merged.update(str(value) for value in source_metadata.get(list_key, []) if value)
+                if merged:
+                    metadata[list_key] = sorted(merged)
+            for key, value in source_metadata.items():
+                if key not in {"lead_ids", "lead_import_row_ids", "lead_import_job_ids"} and value is not None:
+                    metadata[key] = value
+            duplicate.metadata_ = metadata
+            db.commit()
         return duplicate, True
 
     previous = (
@@ -57,10 +71,12 @@ def reserve_document(
         previous_document_id=previous.id if previous else None,
         sensitivity="internal",
         uploaded_by=uploaded_by,
+        workspace_id=workspace_id,
+        processing_instructions=processing_instructions,
         status="processing",
         tags=[],
         keywords=[],
-        metadata_={},
+        metadata_=dict(source_metadata or {}),
     )
     db.add(document)
     db.flush()
