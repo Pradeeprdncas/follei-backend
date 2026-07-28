@@ -21,7 +21,7 @@ behaviour is preserved unchanged.
 """
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Awaitable, Callable
 
 from sqlalchemy.orm import Session
 from loguru import logger
@@ -47,6 +47,7 @@ async def handle_sdr_turn(
     session_id: str | None = None,
     channel: str = "voice",
     response_language: str | None = None,
+    on_token: Callable[[str], Awaitable[None]] | None = None,
 ) -> dict[str, Any]:
     """Process one inbound lead message as an SDR.
 
@@ -57,8 +58,10 @@ async def handle_sdr_turn(
     intent = classify_sdr_intent(text)
 
     # Grounded, cited answer via the shared pipeline (same as the Support worker).
+    stream_tokens = None if intent == "wants_meeting" else on_token
     result = await chat_pipeline(question=text, tenant_id=tenant_id, session_id=session_id,
-                                 response_language=response_language, lead_id=lead_id)
+                                 response_language=response_language, lead_id=lead_id,
+                                 on_token=stream_tokens)
     conversation_id = result.get("conversation_id")
     grounded_answer = result.get("answer") or ""
 

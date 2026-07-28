@@ -1,14 +1,10 @@
-"""Document summarization using Mistral."""
-import httpx
-from app.config.settings import get_settings
+"""Document summarization using Follei's local response model."""
+from app.services.ai.local_llm_client import complete
 from loguru import logger
-
-_settings = get_settings()
-
 
 async def summarize_text(text: str, max_words: int = 100) -> str:
     """
-    Summarize a document using Mistral chat API.
+    Summarize a document using the local Qwen model.
     Returns a short summary string.
     """
     prompt = f"""Summarize the following document in {max_words} words or less. Be concise and capture the main points.
@@ -19,25 +15,16 @@ Document:
 Summary:"""
 
     try:
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            resp = await client.post(
-                f"{_settings.MISTRAL_API_BASE}/chat/completions",
-                headers={"Authorization": f"Bearer {_settings.MISTRAL_API_KEY}"},
-                json={
-                    "model": _settings.MISTRAL_CHAT_MODEL,
-                    "messages": [
-                        {"role": "system", "content": "You are a helpful summarizer."},
-                        {"role": "user", "content": prompt},
-                    ],
-                    "max_tokens": 256,
-                    "temperature": 0.3,
-                },
-            )
-            resp.raise_for_status()
-            data = resp.json()
-            summary = data["choices"][0]["message"]["content"].strip()
-            logger.info(f"Generated summary: {summary[:80]}...")
-            return summary
+        summary = await complete(
+            [
+                {"role": "system", "content": "You are a helpful summarizer."},
+                {"role": "user", "content": prompt},
+            ],
+            max_tokens=256,
+            temperature=0.3,
+        )
+        logger.info(f"Generated summary: {summary[:80]}...")
+        return summary
     except Exception as e:
         logger.error(f"Summarization failed: {e}")
         return ""

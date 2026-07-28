@@ -11,7 +11,7 @@ Two responsibilities:
 """
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Awaitable, Callable
 
 from sqlalchemy.orm import Session
 
@@ -62,6 +62,7 @@ async def run_worker(
     session_id: str | None = None,
     channel: str = "voice",
     response_language: str | None = None,
+    on_token: Callable[[str], Awaitable[None]] | None = None,
 ) -> dict[str, Any]:
     """Dispatch one turn to a worker; auto-hand SDR->Sales on qualification.
 
@@ -80,16 +81,24 @@ async def run_worker(
 
     if normalized == "support":
         from app.services.agents.support.worker import handle_inbound_message
-        return await handle_inbound_message(
-            db, tenant_id=tenant_id, text=text, session_id=session_id, channel=channel,
-            response_language=response_language,
-        )
+        support_kwargs = {
+            "tenant_id": tenant_id,
+            "text": text,
+            "session_id": session_id,
+            "channel": channel,
+            "response_language": response_language,
+            "on_token": on_token,
+        }
+        if lead_id is not None:
+            support_kwargs["lead_id"] = lead_id
+        return await handle_inbound_message(db, **support_kwargs)
 
     if normalized == "sales":
         from app.services.agents.sales.worker import handle_sales_turn
         return await handle_sales_turn(
             db, tenant_id=tenant_id, text=text, lead_id=lead_id,
             session_id=session_id, channel=channel, response_language=response_language,
+            on_token=on_token,
         )
 
     # normalized == "sdr"
@@ -97,6 +106,7 @@ async def run_worker(
     sdr_result = await handle_sdr_turn(
         db, tenant_id=tenant_id, text=text, lead_id=lead_id,
         session_id=session_id, channel=channel, response_language=response_language,
+        on_token=on_token,
     )
     if not sdr_result.get("handoff_to_sales"):
         return sdr_result
@@ -107,6 +117,7 @@ async def run_worker(
     sales_result = await handle_sales_turn(
         db, tenant_id=tenant_id, text=text, lead_id=lead_id,
         session_id=session_id, channel=channel, response_language=response_language,
+        on_token=on_token,
     )
     sales_result["handed_off_from"] = "sdr"
     sales_result["sdr_result"] = sdr_result

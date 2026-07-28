@@ -25,7 +25,15 @@ def _uuid(value: str | UUID | None) -> UUID | None:
         return None
 
 
-def resolve_conversation(db: Session, *, tenant_id: str | UUID, session_id: str | None, title: str, channel: str = "chat") -> Conversation:
+def resolve_conversation(
+    db: Session,
+    *,
+    tenant_id: str | UUID,
+    session_id: str | None,
+    title: str,
+    channel: str = "chat",
+    lead_id: str | UUID | None = None,
+) -> Conversation:
     """Resolve a tenant-owned conversation or create a new canonical one."""
     tenant_uuid = _uuid(tenant_id)
     if not tenant_uuid:
@@ -48,13 +56,19 @@ def resolve_conversation(db: Session, *, tenant_id: str | UUID, session_id: str 
             or_(Conversation.public_id == session_id, Conversation.metadata_["external_session_id"].as_string() == session_id),
         ).first()
 
+    requested_lead_id = _uuid(lead_id)
     if conversation:
+        if requested_lead_id and conversation.lead_id and conversation.lead_id != requested_lead_id:
+            raise ConversationScopeError("Conversation belongs to another lead")
+        if requested_lead_id and not conversation.lead_id:
+            conversation.lead_id = requested_lead_id
         return conversation
 
     metadata = {"external_session_id": session_id} if session_id else {}
     conversation = Conversation(
         id=requested_id or None,
         tenant_id=tenant_uuid,
+        lead_id=requested_lead_id,
         title=title[:180],
         channel=channel,
         status="open",
@@ -87,10 +101,18 @@ def persist_chat_turn(
     supported: bool,
     reason: str,
     channel: str = "chat",
+    lead_id: str | UUID | None = None,
     commit: bool = True,
 ) -> Conversation:
     """Persist a complete user/assistant exchange, citations, and a rolling summary."""
-    conversation = resolve_conversation(db, tenant_id=tenant_id, session_id=session_id, title=question, channel=channel)
+    conversation = resolve_conversation(
+        db,
+        tenant_id=tenant_id,
+        session_id=session_id,
+        title=question,
+        channel=channel,
+        lead_id=lead_id,
+    )
     next_sequence = (conversation.message_count or 0) + 1
     user_message = Message(
         tenant_id=conversation.tenant_id,
@@ -184,11 +206,11 @@ def get_conversation_history(db: Session, *, tenant_id: str | UUID, conversation
 # Phase 5 structured multi-channel turn support.
 import json
 import re
-import httpx
 from loguru import logger
 from app.config.settings import get_settings
 from app.config.database import SessionLocal
 from app.models.conversations.conversation import ConversationIntent, ConversationSentiment, ConversationEntity
+from app.services.ai.local_llm_client import complete
 
 _settings = get_settings()
 
@@ -258,15 +280,21 @@ async def summarize_conversation(*, tenant_id: str | UUID, conversation_id: str 
         turns = db.query(Message).filter(Message.tenant_id == tenant_uuid, Message.conversation_id == conversation_uuid).order_by(Message.sequence_number).all()
         transcript = "\n".join(f"{turn.speaker or turn.role}: {turn.content}" for turn in turns[-30:])
         payload = {"summary": transcript[-1800:], "pain_points": [], "budget_signals": [], "timeline": [], "stakeholders": [], "objections": [], "preferences": [], "competitors": []}
-        if _settings.MISTRAL_API_KEY:
+        summary_provider = "local-qwen"
+        try:
             prompt = "Return JSON only with summary, pain_points, budget_signals, timeline, stakeholders, objections, preferences, competitors. Use only evidence in these turns.\n" + transcript
-            async with httpx.AsyncClient(timeout=20.0) as client:
-                response = await client.post(f"{_settings.MISTRAL_API_BASE}/chat/completions", headers={"Authorization": f"Bearer {_settings.MISTRAL_API_KEY}"}, json={"model": _settings.MISTRAL_CHAT_MODEL, "messages": [{"role": "user", "content": prompt}], "temperature": 0, "response_format": {"type": "json_object"}, "max_tokens": 700})
-                response.raise_for_status()
-            payload = json.loads(response.json()["choices"][0]["message"]["content"])
+            raw_summary = await complete(
+                [{"role": "user", "content": prompt}],
+                temperature=0,
+                max_tokens=700,
+            )
+            payload = json.loads(raw_summary)
+        except Exception as exc:
+            summary_provider = "deterministic-fallback"
+            logger.warning("Conversation summary used deterministic fallback: {}", exc)
         summary_row.summary = str(payload.get("summary") or transcript[-1800:])
         summary_row.status = "ready"
-        summary_row.metadata_ = {"structured": payload, "provider": "mistral" if _settings.MISTRAL_API_KEY else "deterministic-fallback"}
+        summary_row.metadata_ = {"structured": payload, "provider": summary_provider}
         conversation.summary = summary_row.summary
         conversation.analysis_status = "ready"
         conversation.last_analysis_at = datetime.utcnow()

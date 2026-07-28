@@ -1,166 +1,51 @@
-"""Verification agent — checks if answer is supported by context."""
-import httpx
+"""Local-model verification that an answer is supported by retrieved context."""
+from __future__ import annotations
+
 import re
 
-from app.config.settings import get_settings
 from loguru import logger
 
-_settings = get_settings()
+from app.services.ai.local_llm_client import complete
 
 
-async def verify_answer(
-    question: str,
-    context: str,
-    answer: str
-) -> dict:
-    """
-    Verification stage.
+async def verify_answer(question: str, context: str, answer: str) -> dict:
+    prompt = f"""Determine whether the answer is reasonably supported by the context.
+Ignore formatting, rewording, and summarization. Reject only major unsupported facts.
 
-    Enterprise RAG rule:
+Question: {question}
+Context: {context[:12000]}
+Answer: {answer}
 
-    If retrieval succeeded and answer is grounded,
-    do not aggressively reject useful answers.
-
-    Verification is advisory, not a hard blocker.
-    """
-
-    prompt = f"""
-You are a verification agent.
-
-Determine whether the answer is reasonably supported
-by the provided context.
-
-Question:
-{question}
-
-Context:
-{context[:12000]}
-
-Answer:
-{answer}
-
-Rules:
-
-- Ignore formatting differences.
-- Ignore markdown tables.
-- Ignore rewording.
-- Ignore summarization.
-
-Reject ONLY if the answer introduces major facts
-that do not appear in the context.
-
-Return EXACTLY:
-
+Return exactly:
 SUPPORTED: YES or NO
 CONFIDENCE: 0.0-1.0
-REASON: short explanation
-"""
-
+REASON: short explanation"""
     try:
-
-        async with httpx.AsyncClient(timeout=30.0) as client:
-
-            resp = await client.post(
-                f"{_settings.MISTRAL_API_BASE}/chat/completions",
-                headers={
-                    "Authorization": f"Bearer {_settings.MISTRAL_API_KEY}"
+        raw = await complete(
+            [
+                {
+                    "role": "system",
+                    "content": "You are a permissive retrieval-grounding validator.",
                 },
-                json={
-                    "model": _settings.MISTRAL_CHAT_MODEL,
-                    "messages": [
-                        {
-                            "role": "system",
-                            "content": (
-                                "You are a retrieval-grounding validator. "
-                                "Be permissive when the answer is clearly "
-                                "derived from context."
-                            )
-                        },
-                        {
-                            "role": "user",
-                            "content": prompt
-                        }
-                    ],
-                    "temperature": 0,
-                    "max_tokens": 128
-                }
-            )
-
-            resp.raise_for_status()
-
-            data = resp.json()
-
-            raw = data["choices"][0]["message"]["content"]
-
-            logger.info("RAW VERIFIER RESPONSE")
-            logger.info(raw)
-            supported = False
-            confidence = 0.8
-            reason = "Verification completed."
-
-            supported_match = re.search(
-                r"SUPPORTED:\s*(YES|NO)",
-                raw,
-                re.IGNORECASE
-            )
-
-            confidence_match = re.search(
-                r"CONFIDENCE:\s*([0-9]*\.?[0-9]+)",
-                raw,
-                re.IGNORECASE
-            )
-
-            reason_match = re.search(
-                r"REASON:\s*(.*)",
-                raw,
-                re.IGNORECASE | re.DOTALL
-            )
-
-            if supported_match:
-                supported = (
-                    supported_match.group(1).upper()
-                    == "YES"
-                )
-
-            if confidence_match:
-                confidence = float(
-                    confidence_match.group(1)
-                )
-
-            if reason_match:
-                reason = reason_match.group(1).strip()
-
-            confidence = max(
-                0.0,
-                min(
-                    1.0,
-                    confidence
-                )
-            )
-
-            logger.info(
-                f"Verification: "
-                f"supported={supported}, "
-                f"confidence={confidence}"
-            )
-
-            return {
-                "supported": supported,
-                "confidence": confidence,
-                "reason": reason
-            }
-
-    except Exception as e:
-
-        logger.error(
-            f"Verification failed: {e}"
+                {"role": "user", "content": prompt},
+            ],
+            temperature=0,
+            max_tokens=128,
         )
-
+        supported_match = re.search(r"SUPPORTED:\s*(YES|NO)", raw, re.IGNORECASE)
+        confidence_match = re.search(r"CONFIDENCE:\s*([0-9]*\.?[0-9]+)", raw, re.IGNORECASE)
+        reason_match = re.search(r"REASON:\s*(.*)", raw, re.IGNORECASE | re.DOTALL)
+        supported = bool(supported_match and supported_match.group(1).upper() == "YES")
+        confidence = float(confidence_match.group(1)) if confidence_match else 0.8
+        return {
+            "supported": supported,
+            "confidence": max(0.0, min(1.0, confidence)),
+            "reason": reason_match.group(1).strip() if reason_match else "Verification completed.",
+        }
+    except Exception as exc:
+        logger.error("Verification failed: {}", exc)
         return {
             "supported": True,
             "confidence": 0.75,
-            "reason": (
-                "Verification unavailable, "
-                "fallback acceptance."
-            )
+            "reason": "Verification unavailable; fallback acceptance.",
         }

@@ -8,6 +8,7 @@ from app.analysis.services.text_sentiment_service import SentimentService
 from app.analysis.services.emotion_fusion_service import EmotionFusionService
 from app.analysis.services.lead_scoring_service import LeadScoringService
 from app.analysis.services.learned_bant_service import LearnedBANTService
+from app.analysis.services.revenue_intelligence_service import RevenueIntelligenceService
 
 logger = logging.getLogger(__name__)
 
@@ -73,6 +74,12 @@ class VoiceAnalysisPipeline:
         # computes, so surface it under that name for UI consumers that show
         # "lead score / confidence" side by side (e.g. app/static/user_console.html).
         lead_scores.setdefault("confidence", lead_scores.get("conversion_probability"))
+        revenue_intelligence = RevenueIntelligenceService.analyze(
+            text,
+            metadata=metadata,
+            crm_context=crm_context,
+        )
+        lead_scores["revenue_score"] = revenue_intelligence["revenue_score"]
 
         bant_scores = await LearnedBANTService.predict(
             text,
@@ -98,5 +105,6 @@ class VoiceAnalysisPipeline:
             }
         result["lead_scores"] = lead_scores
         result["bant"] = bant_scores
+        result["revenue_intelligence"] = revenue_intelligence
 
         return result

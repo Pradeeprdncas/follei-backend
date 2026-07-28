@@ -7,11 +7,11 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Iterable
 
-import httpx
 from loguru import logger
 from sqlalchemy.orm import Session
 
 from app.config.settings import get_settings
+from app.services.ai.local_llm_client import complete
 from app.models.knowledge.fact_draft import BusinessFactDraft
 from app.services.knowledge.categories import fact_type_for_category
 
@@ -156,8 +156,6 @@ def _normalise_facts(raw: Any, chunks: list[Any]) -> list[dict[str, Any]]:
 
 
 async def _llm_facts(document: Any, chunks: list[Any]) -> list[dict[str, Any]]:
-    if not _settings.MISTRAL_API_KEY:
-        return []
     evidence = "\n\n".join(
         f"[chunk_id={chunk.id}; page={chunk.page}; heading={chunk.heading or ''}]\n{chunk.text[:2200]}"
         for chunk in chunks[:12]
@@ -174,20 +172,12 @@ Document: {document.title}; category: {document.category or 'general'}
 Evidence:
 {evidence}"""
     try:
-        async with httpx.AsyncClient(timeout=20.0) as client:
-            response = await client.post(
-                f"{_settings.MISTRAL_API_BASE}/chat/completions",
-                headers={"Authorization": f"Bearer {_settings.MISTRAL_API_KEY}"},
-                json={
-                    "model": _settings.MISTRAL_CHAT_MODEL,
-                    "messages": [{"role": "user", "content": prompt}],
-                    "temperature": 0,
-                    "response_format": {"type": "json_object"},
-                    "max_tokens": 900,
-                },
-            )
-            response.raise_for_status()
-        return _normalise_facts(json.loads(response.json()["choices"][0]["message"]["content"]), chunks)
+        raw = await complete(
+            [{"role": "user", "content": prompt}],
+            temperature=0,
+            max_tokens=900,
+        )
+        return _normalise_facts(json.loads(raw), chunks)
     except Exception as exc:
         logger.warning(f"Fact extraction fell back to deterministic draft: {exc}")
         return []

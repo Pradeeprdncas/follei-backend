@@ -58,6 +58,11 @@ if errorlevel 1 (
 )
 
 echo [3/7] Starting local infrastructure...
+call :infrastructure_ready_now
+if not errorlevel 1 (
+  echo [OK] Required infrastructure is already reachable; skipping Docker Compose.
+  goto :infrastructure_started
+)
 where docker >nul 2>&1
 if errorlevel 1 (
   echo [WARN] Docker CLI was not found. Checking for already-running services.
@@ -66,6 +71,7 @@ if errorlevel 1 (
   if errorlevel 1 echo [WARN] Docker Compose reported an error; existing services will still be checked.
 )
 
+:infrastructure_started
 echo [4/7] Waiting for required stores and queues...
 call :require_port "PostgreSQL" 55589 60
 if errorlevel 1 goto :failed
@@ -120,6 +126,10 @@ echo ==========================================================
 if "%NO_PAUSE%"=="0" pause
 endlocal
 exit /b 1
+
+:infrastructure_ready_now
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$ports=@(55589,6379,9092,27017,9000,6333); foreach($port in $ports){try{$client=[System.Net.Sockets.TcpClient]::new();$task=$client.ConnectAsync('127.0.0.1',$port);if(-not ($task.Wait(750)-and $client.Connected)){$client.Dispose();exit 1};$client.Dispose()}catch{exit 1}};exit 0" >nul 2>&1
+exit /b %errorlevel%
 
 :require_port
 set "CHECK_NAME=%~1"

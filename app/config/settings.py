@@ -40,6 +40,17 @@ class Settings(BaseSettings):
     MISTRAL_CHAT_MODEL: str = "mistral-medium-2508"
     MISTRAL_API_BASE: str = "https://api.mistral.ai/v1"
     AI_MODELS: str = Field(default="AI_MODELS", description="Canonical local AI model root")
+    # Local response generation. llama.cpp exposes an OpenAI-compatible API,
+    # keeping model runtime concerns outside the FastAPI worker process.
+    LOCAL_LLM_BASE_URL: str = "http://127.0.0.1:8081/v1"
+    LOCAL_LLM_MODEL: str = "follei-qwen3-4b"
+    LOCAL_LLM_AUTO_START: bool = True
+    LOCAL_LLM_SERVER_PATH: str = "AI_MODELS/llama.cpp/b10103/llama-server.exe"
+    LOCAL_LLM_MODEL_PATH: str = "AI_MODELS/gguf/Qwen3-4B-Instruct-2507-Q4_K_M.gguf"
+    LOCAL_LLM_CONTEXT_SIZE: int = 8192
+    LOCAL_LLM_STARTUP_TIMEOUT_SECONDS: float = 45.0
+    LOCAL_LLM_REQUEST_TIMEOUT_SECONDS: float = 60.0
+    LOCAL_LLM_FILLER_DELAY_MS: int = 750
 
     # Ã¢â€â‚¬Ã¢â€â‚¬ Kafka Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
     KAFKA_BOOTSTRAP_SERVERS: str = "localhost:9092"
@@ -133,7 +144,9 @@ class Settings(BaseSettings):
     ELEVENLABS_MALE_VOICE_ID: str = Field(default="")
     ELEVENLABS_FEMALE_VOICE_ID: str = Field(default="")
     ELEVENLABS_TAMIL_VOICE_ID: str = Field(default="")
-    ELEVENLABS_TTS_MODEL: str = "eleven_multilingual_v2"
+    # Flash is ElevenLabs' latency-oriented multilingual voice model. The
+    # provider remains swappable via streaming_tts_service.py.
+    ELEVENLABS_TTS_MODEL: str = "eleven_flash_v2_5"
     ELEVENLABS_STT_MODEL: str = "scribe_v2"
     ELEVENLABS_STT_LANGUAGE: str = "auto"
     ELEVENLABS_OUTPUT_FORMAT: str = "mp3_44100_128"

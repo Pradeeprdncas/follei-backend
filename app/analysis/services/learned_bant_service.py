@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+
 import re
 from pathlib import Path
 from typing import Any
@@ -99,11 +101,13 @@ class LearnedBANTService:
     ) -> dict[str, Any]:
         from app.analysis.services.llm_qualification_service import LLMQualificationService
 
-        bant = await LLMQualificationService.analyze(
-            transcript=text, framework_name="BANT", conversation_id=conversation_id
-        )
-        meddic = await LLMQualificationService.analyze(
-            transcript=text, framework_name="MEDDIC", conversation_id=conversation_id
+        bant, meddic = await asyncio.gather(
+            LLMQualificationService.analyze(
+                transcript=text, framework_name="BANT", conversation_id=conversation_id
+            ),
+            LLMQualificationService.analyze(
+                transcript=text, framework_name="MEDDIC", conversation_id=conversation_id
+            ),
         )
 
         bant_scores = {k: v.get("score") for k, v in bant.get("scores", {}).items()}

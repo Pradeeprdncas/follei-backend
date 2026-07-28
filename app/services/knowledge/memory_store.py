@@ -1,6 +1,7 @@
 ﻿"""FerretDB write-side customer/lead memory with recency and short fact history."""
 from __future__ import annotations
 
+import json
 import re
 from datetime import datetime, timezone
 from typing import Any
@@ -140,6 +141,57 @@ def upsert_lead_import_memory(*, tenant_id: str, lead_id: str, import_job_id: st
     if not any(item.get("import_job_id") == source["import_job_id"] for item in imports):
         imports.append(source)
     document = {**existing, **key, "projection_type": "lead_import_raw_record", "canonical_store": "postgres", "imports": imports[-20:], "latest_record": record, "updated_at": now}
+    collection.replace_one(key, document, upsert=True)
+    return document
+
+
+def append_lead_nurture_turn(
+    *,
+    tenant_id: str,
+    lead_id: str,
+    conversation_id: str,
+    turn_id: str,
+    user_text: str,
+    assistant_text: str,
+    channel: str = "chat",
+    citations: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Immediately mirror a complete nurturing exchange into FerretDB.
+
+    PostgreSQL remains canonical through Conversation + Message rows. This
+    bounded projection makes both sides of every turn available to the next
+    tailored response without waiting for the periodic conversation summary.
+    """
+    collection = get_context_database()["tenant_context"]
+    key = {
+        "tenant_id": str(tenant_id),
+        "subject_type": "lead",
+        "subject_id": str(lead_id),
+    }
+    existing = collection.find_one(key, {"_id": 0}) or {}
+    history = list(existing.get("nurture_history", []))
+    if any(str(item.get("turn_id")) == str(turn_id) for item in history):
+        return existing
+    now = _now()
+    history.append({
+        "turn_id": str(turn_id),
+        "conversation_id": str(conversation_id),
+        "channel": channel,
+        "user": str(user_text),
+        "assistant": str(assistant_text),
+        "citations": json.loads(json.dumps(list(citations or [])[:20], default=str)),
+        "at": now,
+    })
+    document = {
+        **existing,
+        **key,
+        "projection_type": "lead_nurturing_memory",
+        "canonical_store": "postgres",
+        "nurture_history": history[-100:],
+        "last_nurture_turn": history[-1],
+        "nurture_turn_count": int(existing.get("nurture_turn_count", len(history) - 1)) + 1,
+        "updated_at": now,
+    }
     collection.replace_one(key, document, upsert=True)
     return document
 

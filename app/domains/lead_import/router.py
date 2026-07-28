@@ -432,6 +432,48 @@ async def crawl_imported_lead_links(
             queued.append({"url": url, "job_id": str(index_job_id), "lead_ids": source_metadata["lead_ids"], "pages": len(pages), "assets_discovered": len(sources) - len(pages)})
         except Exception as exc:
             failures.append({"url": url, "error": str(exc)[:300]})
+    queued_lead_ids = sorted({
+        str(lead_id)
+        for provenance in url_provenance.values()
+        for lead_id in provenance["lead_ids"]
+    })
+    queued_urls = sorted({str(item["url"]) for item in queued})
+    pre_nurturing = {
+        "system": "System 1",
+        "stage": "processing" if queued else ("needs_attention" if failures else "no_urls_found"),
+        "import_job_id": str(job.id),
+        "urls_queued": queued_urls,
+        "crawl_jobs": [str(item["job_id"]) for item in queued],
+        "failures": failures,
+    }
+    if queued_lead_ids:
+        for lead in db.query(Lead).filter(
+            Lead.tenant_id == job.tenant_id,
+            Lead.id.in_([UUID(value) for value in queued_lead_ids]),
+        ).all():
+            lead.profile_data = {
+                **(lead.profile_data or {}),
+                "pre_nurturing": pre_nurturing,
+            }
+        try:
+            memory = get_context_database()
+            for lead_id in queued_lead_ids:
+                memory["lead_import_memory"].update_one(
+                    {"tenant_id": str(job.tenant_id), "lead_id": lead_id},
+                    {"$set": {"pre_nurturing": pre_nurturing}},
+                    upsert=True,
+                )
+                memory["tenant_context"].update_one(
+                    {
+                        "tenant_id": str(job.tenant_id),
+                        "subject_type": "lead",
+                        "subject_id": lead_id,
+                    },
+                    {"$set": {"pre_nurturing": pre_nurturing}},
+                    upsert=True,
+                )
+        except Exception as exc:
+            logger.warning("System 1 FerretDB status mirror skipped: {}", exc)
     db.commit()
     return {"import_job_id": str(job.id), "urls_found": len(url_provenance), "queued": queued, "failures": failures}
 

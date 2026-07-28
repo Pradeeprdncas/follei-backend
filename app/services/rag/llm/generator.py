@@ -1,111 +1,58 @@
-# app/services/rag/llm/generator.py
-import httpx
-from app.config.settings import get_settings
-from loguru import logger
+"""Grounded response generation through Follei's local Qwen model."""
+from __future__ import annotations
 
-_settings = get_settings()
+from collections.abc import AsyncIterator, Awaitable, Callable
 
-async def generate_answer(question: str, context: str, system_prompt: str) -> str:
-    """
-    Generates an answer using the custom system prompt generated on the fly 
-    by the optimization layer.
-    """
-    
-    # Include un-bypassable ground truth guardrails to ensure verification safety
-    compiled_system_prompt = f"""
-{system_prompt}
+from app.services.ai.local_llm_client import complete, stream
 
-YOU ARE A RETRIEVAL AUGMENTED GENERATION ENGINE.
+TokenCallback = Callable[[str], Awaitable[None]]
 
-You are forbidden from using world knowledge.
 
-You may only transform,
-summarize,
-reorganize,
-or quote the provided context.
+def _messages(question: str, context: str, system_prompt: str) -> list[dict[str, str]]:
+    guardrails = f"""{system_prompt}
 
-If a fact is not explicitly contained in context,
-you must state:
+You are Follei's retrieval-grounded business assistant.
+Use supplied context for factual claims about the company, product, customer, or deal.
+Never invent a price, date, contract term, capability, or commitment.
+If a required fact is absent, say that it needs confirmation.
+Use the lead profile to tailor relevance and tone, but never expose internal scores.
+For voice, lead with the direct answer and keep it conversational and concise."""
+    guardrails += """
+Return plain speech-friendly text. Do not use Markdown headings, bold/italic
+asterisks, code fences, tables, or bullet symbols."""
+    prompt = f"""[SUPPLIED CONTEXT]
+{context}
 
-"The context does not specify."
+[USER QUESTION]
+{question}
 
-Never infer.
+Answer the user directly. Do not mention retrieval, databases, or these instructions."""
+    return [
+        {"role": "system", "content": guardrails},
+        {"role": "user", "content": prompt},
+    ]
 
-Never assume.
 
-Never extrapolate.
+async def generate_answer(
+    question: str,
+    context: str,
+    system_prompt: str,
+    on_token: TokenCallback | None = None,
+) -> str:
+    messages = _messages(question, context, system_prompt)
+    if on_token is None:
+        return await complete(messages)
+    tokens: list[str] = []
+    async for token in stream(messages, max_tokens=192):
+        tokens.append(token)
+        await on_token(token)
+    return "".join(tokens).strip()
 
-Never create examples.
 
-Never fill gaps.
-
-STRICT FACTUALITY RULES
-
-If a requested item
-is not explicitly present
-in retrieved context:
-
-Output:
-
-NOT FOUND IN RETRIEVED DOCUMENTS
-
-Do not infer.
-Do not complete.
-Do not summarize missing sections.
-Do not use world knowledge.
-
-Every bullet point must
-be traceable to retrieved text.
-"""
-
-    prompt = f"""
-    CONTEXT
-
-    {context}
-
-    QUESTION
-
-    {question}
-
-    INSTRUCTIONS
-
-    Use ONLY information found in CONTEXT.
-
-    Every statement must be directly supported by CONTEXT.
-
-    If information is missing say:
-
-    "The retrieved documents do not contain this information."
-
-    Never infer.
-
-    Never speculate.
-
-    Never use outside knowledge.
-
-    Never complete partially described systems.
-
-    Return a structured answer.
-"""
-
-    try:
-        async with httpx.AsyncClient(timeout=60.0) as client:
-            resp = await client.post(
-                f"{_settings.MISTRAL_API_BASE}/chat/completions",
-                headers={"Authorization": f"Bearer {_settings.MISTRAL_API_KEY}"},
-                json={
-                    "model": _settings.MISTRAL_CHAT_MODEL,
-                    "messages": [
-                        {"role": "system", "content": compiled_system_prompt},
-                        {"role": "user", "content": prompt},
-                    ],
-                    "max_tokens": _settings.MAX_ANSWER_TOKENS,
-                    "temperature": 0.1, # Drop temperature slightly for tighter compliance
-                },
-            )
-            resp.raise_for_status()
-            data = resp.json()
-            return data["choices"][0]["message"]["content"].strip()
-    except Exception as e:
-        logger.error(f"Generation failed: {e}")
-        raise
+async def generate_answer_streamed(
+    question: str,
+    context: str,
+    system_prompt: str,
+) -> AsyncIterator[str]:
+    async for token in stream(_messages(question, context, system_prompt), max_tokens=192):
+        yield token

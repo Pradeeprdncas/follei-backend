@@ -1,113 +1,29 @@
-import json
-import httpx
+"""Optional local-model query expansion."""
+from __future__ import annotations
 
-from app.config.settings import get_settings
+import json
+
 from loguru import logger
 
-_settings = get_settings()
+from app.services.ai.local_llm_client import complete
 
 
 async def generate_queries(query: str) -> list[str]:
-    """
-    Generate alternate retrieval queries.
-
-    Returns:
-    [
-        original query,
-        variation 1,
-        variation 2,
-        ...
-    ]
-    """
-
-    prompt = f"""
-You are a retrieval optimization engine.
-
-Generate 5 alternate search queries
-that may retrieve different but relevant
-documentation chunks.
-
-Original Query:
-
-{query}
-
-Return ONLY JSON.
-
-Format:
-
-{{
-    "queries": [
-        "...",
-        "...",
-        "..."
-    ]
-}}
-"""
-
+    prompt = f"""Generate five alternate retrieval queries for the query below.
+Return only JSON shaped as {{"queries": ["...", "..."]}}.
+Original query: {query}"""
     try:
-
-        async with httpx.AsyncClient(
-            timeout=30.0
-        ) as client:
-
-            resp = await client.post(
-                f"{_settings.MISTRAL_API_BASE}/chat/completions",
-                headers={
-                    "Authorization":
-                    f"Bearer {_settings.MISTRAL_API_KEY}"
-                },
-                json={
-                    "model":
-                    _settings.MISTRAL_CHAT_MODEL,
-                    "messages": [
-                        {
-                            "role": "user",
-                            "content": prompt
-                        }
-                    ],
-                    "temperature": 0,
-                    "response_format": {
-                        "type": "json_object"
-                    }
-                }
-            )
-
-        resp.raise_for_status()
-
-        content = (
-            resp.json()
-            ["choices"][0]
-            ["message"]["content"]
+        raw = await complete(
+            [{"role": "user", "content": prompt}],
+            temperature=0,
+            max_tokens=256,
         )
-
-        parsed = json.loads(content)
-
-        generated = parsed.get(
-            "queries",
-            []
-        )
-
-        final_queries = [query]
-
-        for q in generated:
-
-            if (
-                isinstance(q, str)
-                and q.strip()
-                and q not in final_queries
-            ):
-                final_queries.append(q)
-
-        logger.info(
-            f"Generated {len(final_queries)} retrieval queries"
-        )
-
-        return final_queries
-
-    except Exception as e:
-
-        logger.warning(
-            f"Query expansion failed: {e}"
-        )
-
+        generated = json.loads(raw).get("queries", [])
+        result = [query]
+        for item in generated:
+            if isinstance(item, str) and item.strip() and item not in result:
+                result.append(item.strip())
+        return result
+    except Exception as exc:
+        logger.warning("Query expansion failed: {}", exc)
         return [query]

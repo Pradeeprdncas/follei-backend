@@ -32,5 +32,8 @@ class LanguageService:
     @staticmethod
     def response_instruction(language: str) -> str:
         if LanguageService.normalize(language) == "ta":
-            return "Reply in natural Tamil. Preserve necessary technical terms in English when clearer."
+            return (
+                "Reply in natural spoken Tanglish: conversational Tamil in Tamil script mixed "
+                "with familiar English words. Avoid formal or literary Tamil and avoid Markdown."
+            )
         return "Reply in natural English."

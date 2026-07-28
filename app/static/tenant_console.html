@@ -80,4 +80,65 @@ async function refreshStoreContent(){if(!token)return;try{$('inspectBtn').disabl
 function startPoll(){refresh();refreshKnowledgeAnalyses();clearInterval(pollTimer);let n=0;pollTimer=setInterval(()=>{refresh();refreshKnowledgeAnalyses();if(++n>30)clearInterval(pollTimer)},2000)}
 $('loginBtn').onclick=login;$('uploadBtn').onclick=uploadAll;$('webBtn').onclick=ingestWeb;$('leadImportBtn').onclick=startLeadImport;$('leadImportFile').onchange=enable;$('refreshBtn').onclick=refresh;$('inspectBtn').onclick=refreshStoreContent;$('inspectDocument').onchange=refreshStoreContent;$('leadsRefreshBtn').onclick=refreshLeads;$('files').onchange=e=>choose(e.target.files);$('drop').onclick=()=>$('files').click();$('drop').ondragover=e=>{e.preventDefault();$('drop').classList.add('drag')};$('drop').ondragleave=()=> $('drop').classList.remove('drag');$('drop').ondrop=e=>{e.preventDefault();$('drop').classList.remove('drag');choose(e.dataTransfer.files)};
 if(token){$('identity').textContent=`Connected · tenant ${tenantId}`;enable();refresh().then(refreshStoreContent);refreshLeads()}
+</script>
+<script>
+// System 1 lead pre-nurturing and dual-store nurturing inspector.
+const baseRenderLeadContext=renderLeadContext;
+let activeSystem1LeadId='',system1LeadPoll=null;
+renderLeadContext=function(record){
+  const base=baseRenderLeadContext(record);
+  const turns=(record.nurture_history||[]).slice().reverse().map(turn=>`
+    <div class="edge">
+      <div class="id">${esc(turn.at||'')} · ${esc(turn.channel||'chat')} · ${esc(turn.conversation_id||'')}</div>
+      <div><b>Lead:</b> ${esc(turn.user||'')}</div>
+      <div><b>Follei:</b> ${esc(turn.assistant||'')}</div>
+    </div>`).join('');
+  return base+`<div class="record"><b>FerretDB nurturing history</b>
+    <div class="id">Immediate user + AI response memory · ${record.nurture_turn_count||0} turns</div>
+    ${turns||'<div class="empty">No nurturing exchanges have been mirrored yet.</div>'}</div>`;
+};
+function renderPreNurturing(state){
+  const tone=state.ready?'ok':state.stage==='needs_attention'?'bad':'warn';
+  const urls=(state.urls||[]).map(url=>`<div class="edge">${esc(url)}</div>`).join('');
+  return `<div class="record"><b>System 1 · Lead pre-nurturing</b>
+    <div class="id">Import → authorised URL discovery → hybrid crawl → PostgreSQL/Qdrant/FerretDB projection</div>
+    <div style="margin-top:8px">${pill((state.stage||'not_started').replaceAll('_',' '),tone)}</div>
+    <div class="id" style="margin-top:8px">${state.import_rows||0} imported rows · ${(state.urls||[]).length} source URLs · ${state.crawl_jobs||0} crawl jobs · ${state.crawl_pending||0} pending · ${state.ferretdb_crawled_memories||0} FerretDB memories · ${state.qdrant_evidence_points||0} semantic points</div>
+    ${urls||'<div class="empty">No authorised lead URLs have been crawled yet. Use “Crawl authorised URLs” after reviewing the import.</div>'}
+  </div>`;
+}
+loadLeadDetail=async function(id){
+  activeSystem1LeadId=id;
+  $('leadDetail').innerHTML='<div class="empty">Loading…</div>';
+  try{
+    const d=await jsonFetch('/ui/tenant/leads/'+id,{headers:auth()});
+    const l=d.lead,pre=renderPreNurturing(d.pre_nurturing||{});
+    const pgTurns=(d.postgres_nurture_history||[]).map(message=>`<div class="edge"><div class="id">${esc(message.created_at||'')} · ${esc(message.channel||'chat')} · PostgreSQL</div><b>${message.role==='assistant'?'Follei':'Lead'}:</b> ${esc(message.content||'')}</div>`).join('')||'<div class="empty">No PostgreSQL nurturing messages yet.</div>';
+    const ferret=d.ferretdb_memory?renderLeadContext(d.ferretdb_memory):'<div class="empty">No lead-scoped FerretDB memory yet.</div>';
+    const imports=(d.import_rows||[]).map(row=>jsonRecord(`Imported row ${row.row_index} · ${row.status}`,row)).join('')||'<div class="empty">No import provenance.</div>';
+    const importMemory=d.ferretdb_import_memory?jsonRecord('Complete FerretDB import record',d.ferretdb_import_memory):'<div class="empty">No FerretDB import projection.</div>';
+    const crawled=(d.ferretdb_crawled_documents||[]).map(row=>jsonRecord(`Crawled memory · ${row.title||row.document_id}`,row)).join('')||'<div class="empty">No completed crawled-document projection.</div>';
+    const jobs=(d.linked_ingestion_jobs||[]).map(job=>`<div class="edge"><b>${esc(job.status)}</b> · ${esc(job.filename||'source')}<div class="id">${esc(job.source_uri||'')} · ${esc(job.id)}</div></div>`).join('')||'<div class="empty">No linked crawl jobs.</div>';
+    $('leadDetail').innerHTML=`<div class="record"><b>${esc(l.name||l.email)}</b><div class="id">${esc(l.email)} · ${esc(l.company||'no company')} · ${esc(l.id)}</div>
+      ${pre}
+      <div class="id" style="margin-top:10px">PostgreSQL structured lead</div>${jsonRecord('Operational lead record',l)}
+      <div class="id" style="margin-top:10px">PostgreSQL nurturing history — user and AI messages</div>${pgTurns}
+      <div class="id" style="margin-top:10px">FerretDB lead memory used for tailoring</div>${ferret}
+      <div class="id" style="margin-top:10px">PostgreSQL import rows</div>${imports}
+      <div class="id" style="margin-top:10px">FerretDB complete source record</div>${importMemory}
+      <div class="id" style="margin-top:10px">FerretDB crawled knowledge</div>${crawled}
+      <div class="id" style="margin-top:10px">System 1 crawl/index jobs</div>${jobs}
+    </div>`;
+  }catch(error){$('leadDetail').innerHTML=`<div class="empty">${esc(error.message)}</div>`}
+};
+const baseStartPoll=startPoll;
+startPoll=function(){
+  baseStartPoll();
+  clearInterval(system1LeadPoll);
+  let checks=0;
+  system1LeadPoll=setInterval(()=>{
+    if(activeSystem1LeadId)loadLeadDetail(activeSystem1LeadId);
+    if(++checks>30)clearInterval(system1LeadPoll);
+  },2000);
+};
 </script></body></html>

@@ -46,6 +46,11 @@ def create_app() -> FastAPI:
     @app.on_event("startup")
     async def startup():
         logger.info("Starting up Follei backend...")
+        from app.services.ai.local_llm_server import ensure_local_llm_server
+        try:
+            await ensure_local_llm_server()
+        except Exception as exc:
+            logger.warning(f"Local response model startup warning: {exc}")
         try: ensure_collection()
         except Exception as exc: logger.warning(f"Qdrant init warning: {exc}")
         try: ensure_topics()

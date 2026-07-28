@@ -36,7 +36,9 @@ class ElevenLabsService:
             "zh": "zh", "ar": "ar", "ru": "ru", "nl": "nl",
         }
         tts_lang = _LANG_MAP.get(language, "en")
-        tts = gTTS(text=text, lang=tts_lang)
+        # Google's India endpoint gives the fallback a more locally familiar
+        # cadence. Mixed Tamil/English text remains intact for Tanglish speech.
+        tts = gTTS(text=text, lang=tts_lang, tld="co.in", slow=False)
         destination.parent.mkdir(parents=True, exist_ok=True)
         tts.save(str(destination))
         return {
@@ -95,6 +97,12 @@ class ElevenLabsService:
         body: dict[str, Any] = {
             "text": text,
             "model_id": _settings.ELEVENLABS_TTS_MODEL,
+            "voice_settings": {
+                "stability": 0.45,
+                "similarity_boost": 0.75,
+                "style": 0.25,
+                "use_speaker_boost": True,
+            },
         }
         params = {"output_format": _settings.ELEVENLABS_OUTPUT_FORMAT}
         try:

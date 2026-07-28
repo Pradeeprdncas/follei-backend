@@ -2,6 +2,7 @@
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Follei Voice Intelligence</title>
 <style>
 :root{--bg:#091817;--panel:#102321;--panel2:#142b28;--line:#28423e;--mint:#5ee0ad;--lime:#d7ff74;--text:#edf9f5;--muted:#88a59e;--red:#ff7575}*{box-sizing:border-box}body{margin:0;background:radial-gradient(circle at 80% -10%,#163d36 0,transparent 36%),var(--bg);color:var(--text);font:14px/1.45 Inter,Segoe UI,Arial,sans-serif}.shell{max-width:1380px;margin:auto;padding:0 28px 46px}header{height:82px;display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid var(--line)}.brand{display:flex;gap:12px;align-items:center}.mark{width:38px;height:38px;border-radius:12px;display:grid;place-items:center;background:var(--lime);color:#10231f;font-weight:900}.brand h1{font-size:18px;margin:0}.brand p{font-size:11px;margin:2px 0;color:var(--muted)}nav a{color:var(--muted);text-decoration:none;padding:8px 11px;border-radius:8px}nav a.active{background:#1b3732;color:var(--text)}.login{display:grid;grid-template-columns:1fr 1fr auto;gap:9px;margin:22px 0}.card{background:rgba(16,35,33,.95);border:1px solid var(--line);border-radius:17px;padding:19px;box-shadow:0 14px 40px rgba(0,0,0,.16)}input,select,button{font:inherit;padding:10px 12px;border-radius:9px;border:1px solid #36534d;background:#0b1d1b;color:var(--text)}button{cursor:pointer;background:var(--mint);color:#082019;border:0;font-weight:800}button.secondary{background:#1a3732;color:var(--text)}button:disabled{opacity:.42;cursor:not-allowed}.main{display:grid;grid-template-columns:.92fr 1.08fr;gap:18px}.call-head{display:flex;justify-content:space-between;align-items:center}.eyebrow{font-size:10px;text-transform:uppercase;letter-spacing:.09em;color:var(--mint);font-weight:800}.status{font-size:12px;color:var(--muted)}.status.live{color:var(--mint)}.orb-wrap{height:230px;display:grid;place-items:center}.orb{width:142px;height:142px;border-radius:50%;display:grid;place-items:center;background:radial-gradient(circle at 35% 30%,#72f2c0,#18745d 50%,#0d2f29 72%);box-shadow:0 0 0 14px rgba(94,224,173,.05),0 0 55px rgba(94,224,173,.24);transition:.2s}.orb.recording{animation:pulse 1.2s infinite}.orb span{font-size:36px}@keyframes pulse{50%{transform:scale(1.06);box-shadow:0 0 0 22px rgba(94,224,173,.03),0 0 70px rgba(94,224,173,.36)}}.call-actions{display:grid;grid-template-columns:1fr 1fr;gap:9px}.call-actions button:first-child{grid-column:1/-1;padding:14px}.file{display:block;text-align:center;padding:10px;border:1px dashed #3c5c55;border-radius:9px;color:var(--muted);cursor:pointer}.typed{display:flex;gap:8px;margin-top:9px}.typed input{flex:1}.meta{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}.chip{font-size:10px;border:1px solid var(--line);border-radius:999px;padding:4px 8px;color:var(--muted)}.conversation{height:520px;display:flex;flex-direction:column}.conversation h2,.analytics h2{font-size:16px;margin:0}.turns{flex:1;overflow:auto;padding:14px 0;display:flex;flex-direction:column;gap:9px}.bubble{max-width:87%;padding:10px 12px;border-radius:12px;background:#18332f}.bubble.you{align-self:flex-end;background:#25443e}.bubble .who{font-size:9px;text-transform:uppercase;color:var(--muted);letter-spacing:.08em;margin-bottom:3px}.analytics{grid-column:1/-1}.analytics-grid{display:grid;grid-template-columns:1.25fr .75fr .75fr;gap:14px;margin-top:15px}.score-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}.score-head{display:flex;justify-content:space-between;font-size:11px}.bar{height:7px;background:#203a36;border-radius:4px;overflow:hidden;margin-top:5px}.fill{height:100%;background:linear-gradient(90deg,var(--mint),var(--lime));transition:.35s}.framework{display:grid;grid-template-columns:1fr 1fr;gap:8px}.fcell{background:#0c1f1d;border:1px solid #203c37;border-radius:9px;padding:9px}.fcell .k{font-size:9px;text-transform:uppercase;color:var(--muted)}.fcell .v{font-size:17px;font-weight:800;margin-top:2px}.signal{display:grid;grid-template-columns:1fr 1fr;gap:8px}.signal div{background:#0c1f1d;border-radius:9px;padding:10px}.signal b{display:block;font-size:13px}.signal span{font-size:10px;color:var(--muted)}.note{font-size:11px;color:var(--muted);margin-top:12px;border-top:1px solid var(--line);padding-top:10px}.error{color:var(--red)}@media(max-width:920px){.main,.analytics-grid{grid-template-columns:1fr}.analytics{grid-column:auto}.login{grid-template-columns:1fr}.shell{padding:0 14px 30px}.conversation{height:430px}}
+.latency-grid{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:6px;margin-top:10px}.latency-cell{background:#0c1f1d;border:1px solid var(--line);border-radius:8px;padding:7px 8px}.latency-cell span{display:block;color:var(--muted);font-size:8px;text-transform:uppercase;letter-spacing:.04em}.latency-cell b{font-size:13px}
 </style></head><body><div class="shell">
 <header><div class="brand"><div class="mark">F</div><div><h1>Voice Intelligence Console</h1><p>Multilingual conversation · grounded reply · qualification</p></div></div><nav><a href="/tenant">Tenant</a><a class="active" href="/user">User voice</a><a href="/docs">API</a></nav></header>
 <section class="card login"><input id="email" type="email" placeholder="Admin email"><input id="password" type="password" placeholder="Password"><button id="loginBtn">Sign in & start</button><input id="leadIdentifier" placeholder="Lead phone or email (identifies the lead, not you)" style="grid-column:1/-1"><div class="status" id="identity" style="grid-column:1/-1">Sign in to create a tenant-scoped voice session.</div></section>
@@ -12,7 +13,7 @@
 const $=id=>document.getElementById(id);const SCORE_FIELDS=[['icp_score','ICP'],['intent_score','Intent'],['engagement_score','Engagement'],['qualification_score','Qualification'],['buying_signal_score','Buying Signal'],['relationship_score','Relationship']];const BANT=[['budget','Budget'],['authority','Authority'],['need','Need'],['timeline','Timeline']];const MEDDIC=[['metrics','Metrics'],['economic_buyer','Economic buyer'],['decision_criteria','Decision criteria'],['decision_process','Decision process'],['identify_pain','Identify pain'],['champion','Champion']];let token=sessionStorage.getItem('follei_token')||'',tenantId='',leadId='',conversationId='',ws=null,recording=false,audioContext=null,stream=null,source=null,processor=null,chunks=[],queue=[],playing=false;
 function auth(){return {'Authorization':'Bearer '+token}}async function req(url,opts={}){const r=await fetch(url,opts);let d={};try{d=await r.json()}catch{}if(!r.ok)throw new Error(d.detail||`HTTP ${r.status}`);return d}function status(t,live=false){$('status').textContent=t;$('status').className='status '+(live?'live':'')}function line(who,text){if(!text)return;const first=$('turns').querySelector('.status');if(first)first.remove();const d=document.createElement('div');d.className='bubble '+who;d.innerHTML=`<div class="who">${who==='you'?'You':'Follei'}</div><div></div>`;d.lastChild.textContent=text;$('turns').appendChild(d);$('turns').scrollTop=$('turns').scrollHeight}
 async function login(){try{$('loginBtn').disabled=true;const d=await req('/api/v1/auth/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email:$('email').value,password:$('password').value})});token=d.access_token;tenantId=d.user.tenant_id;sessionStorage.setItem('follei_token',token);$('identity').textContent=`${d.user.full_name||d.user.email} · ${tenantId}`;await newSession();await capabilities()}catch(e){$('identity').textContent=e.message;$('identity').className='status error'}finally{$('loginBtn').disabled=false}}
-async function capabilities(){try{const d=await req('/ui/user/capabilities',{headers:auth()});$('analysisSource').textContent=`${d.speech_to_text.provider} ${d.speech_to_text.model} · Follei lead intelligence`;if(!d.speech_to_text.configured)status('Speech provider is not configured; typed turns still work.')}catch{}}
+async function capabilities(){try{const d=await req('/ui/user/capabilities',{headers:auth()});$('analysisSource').textContent=`STT ${d.speech_to_text.provider} ${d.speech_to_text.model} · TTS ${d.text_to_speech.provider} ${d.text_to_speech.model}`;if(!d.speech_to_text.configured)status('Speech provider is not configured; typed turns still work.')}catch{}}
 async function newSession(){if(ws)ws.close();const identifier=$('leadIdentifier').value.trim();const d=await req('/ui/user/session',{method:'POST',headers:{...auth(),'Content-Type':'application/json'},body:JSON.stringify({identifier:identifier||null})});tenantId=d.tenant_id;leadId=d.lead_id;conversationId=d.conversation_id;$('sessionTitle').textContent='Conversation '+conversationId.slice(0,8)+(d.returning_lead?' · returning lead':identifier?' · new lead':'');$('newBtn').disabled=false;connect()}
 function connect(){const scheme=location.protocol==='https:'?'wss':'ws';const worker=$('worker').value;let u=`${scheme}://${location.host}/ws/voice/${conversationId}?tenant_id=${encodeURIComponent(tenantId)}&access_token=${encodeURIComponent(token)}&lead_id=${encodeURIComponent(leadId)}`;if(worker)u+=`&worker_type=${worker}`;ws=new WebSocket(u);$('conn').textContent='connecting';ws.onopen=()=>status('Authenticating voice session…');ws.onclose=()=>{$('conn').textContent='offline';$('micBtn').disabled=true;$('sendBtn').disabled=true};ws.onerror=()=>status('Voice connection failed. Check API logs.');ws.onmessage=e=>handle(JSON.parse(e.data))}
 function handle(m){if(m.type==='voice_connected'){$('conn').textContent='live';$('micBtn').disabled=false;$('sendBtn').disabled=false;status('Ready. Speak, upload WAV/audio, or type a turn.',true)}else if(m.type==='auth_error'){status(m.error);ws.close()}else if(m.type==='transcript_received'&&m.is_final){line('you',m.text);if(m.language)$('language').textContent='language: '+m.language;$('replyState').textContent='Thinking…'}else if(m.type==='filler'){$('replyState').textContent=m.text}else if(m.type==='tts_chunk'){line('assistant',m.text);enqueue(m.audio_base64,m.format||'mp3');$('replyState').textContent=m.is_last?'Reply complete':'Speaking…'}else if(m.type==='voice_analysis'){render(m.data||{});$('analysisSource').textContent='Analysis complete · '+(m.data?.bant?.source||'model/heuristic')}else if(m.type==='worker_result'){const d=m.data||{};$('workerState').textContent='worker: '+(d.worker||$('worker').value||'assistant')+(d.handed_off_from?' · handoff':'');}else if(m.type==='voice_turn_queued')status('Turn queued behind the current reply.',true);else if(m.type==='upload_audio_error')status(m.error||'Audio failed')}
@@ -23,4 +24,157 @@ async function startMic(){stream=await navigator.mediaDevices.getUserMedia({audi
 $('loginBtn').onclick=login;$('newBtn').onclick=newSession;$('micBtn').onclick=()=>recording?stopMic():startMic().catch(e=>status(e.message));$('audioFile').onchange=e=>e.target.files[0]&&sendFile(e.target.files[0]).catch(x=>status(x.message));$('sendBtn').onclick=()=>{const t=$('typed').value.trim();if(!t)return;ws.send(JSON.stringify({type:'transcript_chunk',text:t,is_final:true,language:$('typedLang').value}));$('typed').value=''};$('typed').onkeydown=e=>{if(e.key==='Enter')$('sendBtn').click()};$('worker').onchange=()=>{if(conversationId){ws?.close();connect()}$('workerState').textContent='worker: '+($('worker').selectedOptions[0].text)};
 document.querySelector('.note').textContent='Voice tone directly enriches relationship, overall lead confidence, and emotion fusion. ICP, intent, engagement, qualification, and buying signal remain transcript/business-evidence led. BANT and MEDDIC use the transcript and context, so they do not require voice tone.';
 if(token){$('identity').textContent='Session token restored. Click New session.';$('newBtn').disabled=false;capabilities();newSession().catch(e=>status(e.message))}render({});
+</script>
+<script>
+// Realtime voice transport: AudioWorklet -> ElevenLabs Scribe VAD -> Follei.
+// Kept separate from the upload fallback above so uploaded audio still works.
+SCORE_FIELDS.push(['revenue_score','Revenue']);
+const latencyHost=document.createElement('div');
+latencyHost.className='latency-grid';
+latencyHost.innerHTML='<div class="latency-cell"><span>STT partial</span><b id="latencyStt">—</b></div><div class="latency-cell"><span>First token</span><b id="latencyToken">—</b></div><div class="latency-cell"><span>Generation</span><b id="latencyGeneration">—</b></div><div class="latency-cell"><span>First audio</span><b id="latencyAudio">—</b></div><div class="latency-cell"><span>TTS chunk</span><b id="latencyTts">—</b></div><div class="latency-cell"><span>Total</span><b id="latencyTotal">—</b></div>';
+document.querySelector('.meta').after(latencyHost);
+$('typedLang').querySelector('option[value="ta"]').textContent='Tamil / Tanglish';
+let scribeSocket=null,workletModuleUrl='',bargeIssued=false,speechStartedAt=0,firstPartialSttMs=null;
+let playbackContext=null,playbackCursor=0,decodeChain=Promise.resolve(),activeReplySources=[],activeAssistantBubble=null;
+function latencyText(value){return Number.isFinite(Number(value))?`${Math.round(Number(value))} ms`:'—'}
+function updateLatency(stage,value){
+  const targets={stt:'latencyStt',stt_first_partial:'latencyStt',first_token:'latencyToken',generation:'latencyGeneration',first_audio:'latencyAudio',tts:'latencyTts',total:'latencyTotal'};
+  const target=targets[stage];
+  if(target)$(target).textContent=latencyText(value);
+}
+function resetLatency(){for(const id of ['latencyStt','latencyToken','latencyGeneration','latencyAudio','latencyTts','latencyTotal'])$(id).textContent='—'}
+function appendAssistantText(text){
+  if(!text)return;
+  if(!activeAssistantBubble){
+    const first=$('turns').querySelector('.status');if(first)first.remove();
+    activeAssistantBubble=document.createElement('div');
+    activeAssistantBubble.className='bubble assistant';
+    activeAssistantBubble.innerHTML='<div class="who">Follei</div><div></div>';
+    $('turns').appendChild(activeAssistantBubble);
+  }
+  const body=activeAssistantBubble.lastChild;
+  body.textContent+=(body.textContent?' ':'')+text.trim();
+  $('turns').scrollTop=$('turns').scrollHeight;
+}
+function ensurePlaybackContext(){
+  if(!playbackContext||playbackContext.state==='closed')playbackContext=new(window.AudioContext||window.webkitAudioContext)();
+  if(playbackContext.state==='suspended')playbackContext.resume();
+  return playbackContext;
+}
+enqueue=function(b64,fmt){
+  if(!b64)return;
+  decodeChain=decodeChain.then(async()=>{
+    const ctx=ensurePlaybackContext(),binary=atob(b64),bytes=new Uint8Array(binary.length);
+    for(let i=0;i<binary.length;i++)bytes[i]=binary.charCodeAt(i);
+    const buffer=await ctx.decodeAudioData(bytes.buffer.slice(0));
+    const sourceNode=ctx.createBufferSource();
+    sourceNode.buffer=buffer;sourceNode.connect(ctx.destination);
+    const startAt=Math.max(ctx.currentTime+.025,playbackCursor-.025);
+    playbackCursor=startAt+buffer.duration;
+    activeReplySources.push(sourceNode);
+    sourceNode.onended=()=>{activeReplySources=activeReplySources.filter(item=>item!==sourceNode)};
+    sourceNode.start(startAt);
+  }).catch(error=>status('Audio playback failed: '+error.message));
+};
+play=function(){};
+function stopReplyAudio(){
+  for(const sourceNode of activeReplySources){try{sourceNode.stop()}catch{}}
+  activeReplySources=[];queue=[];playing=false;decodeChain=Promise.resolve();
+  playbackCursor=playbackContext?.currentTime||0;
+}
+async function startMic(){
+  const issued=await req(`/api/voice/realtime-stt-token?tenant_id=${encodeURIComponent(tenantId)}&access_token=${encodeURIComponent(token)}`);
+  const scribeUrl=`wss://api.elevenlabs.io/v1/speech-to-text/realtime?model_id=scribe_v2_realtime&audio_format=pcm_16000&commit_strategy=vad&vad_silence_threshold_secs=0.65&include_language_detection=true&token=${encodeURIComponent(issued.token)}`;
+  scribeSocket=new WebSocket(scribeUrl);
+  await new Promise((resolve,reject)=>{scribeSocket.onopen=resolve;scribeSocket.onerror=()=>reject(new Error('Realtime transcription could not connect.'))});
+  scribeSocket.onmessage=event=>{
+    const data=JSON.parse(event.data);
+    if(data.message_type==='partial_transcript'){
+      if(data.text){
+        if(speechStartedAt&&!Number.isFinite(firstPartialSttMs)){
+          firstPartialSttMs=performance.now()-speechStartedAt;
+          updateLatency('stt_first_partial',firstPartialSttMs);
+        }
+        $('replyState').textContent='Live: '+data.text;
+        if(!bargeIssued){bargeIssued=true;stopReplyAudio();ws.send(JSON.stringify({type:'barge_in'}))}
+      }
+    }else if(data.message_type==='committed_transcript'||data.message_type==='committed_transcript_with_timestamps'){
+      const committed=(data.text||'').trim();
+      bargeIssued=false;
+      const commitMs=speechStartedAt?performance.now()-speechStartedAt:null;
+      if(committed)ws.send(JSON.stringify({
+        type:'transcript_chunk',text:committed,is_final:true,language:data.language_code||null,
+        client_metrics:{stt_first_partial_ms:firstPartialSttMs,stt_commit_ms:commitMs}
+      }));
+      speechStartedAt=0;firstPartialSttMs=null;
+    }else if((data.message_type||'').includes('error')){
+      status(data.error||'Realtime transcription error');
+    }
+  };
+  stream=await navigator.mediaDevices.getUserMedia({audio:{channelCount:1,echoCancellation:true,noiseSuppression:true}});
+  audioContext=new(window.AudioContext||window.webkitAudioContext)({sampleRate:16000});
+  const workletCode=`class PCMProcessor extends AudioWorkletProcessor{process(inputs){const x=inputs[0][0];if(x){const b=new ArrayBuffer(x.length*2),v=new DataView(b);for(let i=0;i<x.length;i++){const s=Math.max(-1,Math.min(1,x[i]));v.setInt16(i*2,s<0?s*32768:s*32767,true)}this.port.postMessage(b,[b])}return true}}registerProcessor('pcm-processor',PCMProcessor)`;
+  workletModuleUrl=URL.createObjectURL(new Blob([workletCode],{type:'application/javascript'}));
+  await audioContext.audioWorklet.addModule(workletModuleUrl);
+  source=audioContext.createMediaStreamSource(stream);
+  processor=new AudioWorkletNode(audioContext,'pcm-processor');
+  processor.port.onmessage=event=>{
+    if(scribeSocket?.readyState!==1)return;
+    const bytes=new Uint8Array(event.data);
+    if(!speechStartedAt){
+      const samples=new DataView(event.data);let peak=0;
+      for(let i=0;i<samples.byteLength;i+=16)peak=Math.max(peak,Math.abs(samples.getInt16(i,true)));
+      if(peak>900)speechStartedAt=performance.now();
+    }
+    let binary='';
+    for(let i=0;i<bytes.length;i++)binary+=String.fromCharCode(bytes[i]);
+    scribeSocket.send(JSON.stringify({message_type:'input_audio_chunk',audio_base_64:btoa(binary)}));
+  };
+  source.connect(processor);
+  recording=true;
+  $('orb').classList.add('recording');
+  $('micBtn').textContent='Stop listening';
+  status('Live transcription active…',true);
+}
+async function stopMic(){
+  recording=false;
+  $('orb').classList.remove('recording');
+  $('micBtn').textContent='Start speaking';
+  processor?.disconnect();
+  source?.disconnect();
+  stream?.getTracks().forEach(track=>track.stop());
+  if(scribeSocket?.readyState===1)scribeSocket.close();
+  if(audioContext)await audioContext.close();
+  if(workletModuleUrl)URL.revokeObjectURL(workletModuleUrl);
+  status('Realtime microphone stopped.',true);
+}
+const originalHandle=handle;
+handle=function(message){
+  if(message.type==='voice_turn_cancelled'){
+    stopReplyAudio();
+    activeAssistantBubble=null;
+    $('replyState').textContent='Listening…';
+    return;
+  }
+  if(message.type==='transcript_received'&&message.is_final){
+    activeAssistantBubble=null;
+    resetLatency();
+  }
+  if(message.type==='voice_latency'){
+    updateLatency(message.stage,message.duration_ms);
+    return;
+  }
+  if(message.type==='tts_chunk'){
+    if(message.source!=='filler')appendAssistantText(message.text);
+    enqueue(message.audio_base64,message.format||'mp3');
+    $('replyState').textContent=message.is_last?'Reply complete':'Speaking…';
+    return;
+  }
+  if(message.type==='assistant_token')$('replyState').textContent='Answering…';
+  if(message.type==='assistant_stream_complete'){
+    $('replyState').textContent='Reply complete';
+    activeAssistantBubble=null;
+  }
+  originalHandle(message);
+};
 </script></body></html>

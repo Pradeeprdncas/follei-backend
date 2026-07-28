@@ -3,7 +3,7 @@ import json
 from uuid import uuid4
 from app.services.rag.llm.optimizer import optimize_user_request
 from app.services.rag.pipelines.retrieval import retrieve_context
-from app.services.rag.llm.generator import generate_answer
+from app.services.rag.llm.generator import TokenCallback, generate_answer
 from app.services.rag.llm.citations import extract_citations
 from app.services.rag.verifier.confidence import verify_answer
 from app.services.rag.telemetry import LatencyTrace
@@ -141,7 +141,7 @@ _LANGUAGE_NAMES = {
 }
 
 
-def _language_instruction(response_language: str | None) -> str:
+def _language_instruction(response_language: str | None, user_text: str = "") -> str:
     """A reply-language directive for the system prompt, or '' when not needed."""
     if not response_language:
         return ""
@@ -149,6 +149,9 @@ def _language_instruction(response_language: str | None) -> str:
     code = LanguageService.normalize(response_language)
     if code in ("", "en"):
         return ""  # English is the default; no directive needed.
+    if code == "ta":
+        from app.analysis.services.tanglish_style import prompt_instruction
+        return prompt_instruction(user_text)
     name = _LANGUAGE_NAMES.get(code)
     target = name or "the same language the user spoke in"
     return f" Respond in {target}. Keep essential technical terms in English when clearer."
@@ -170,7 +173,8 @@ _HUMAN_TONE_INSTRUCTION = (
 
 
 async def chat_pipeline(question: str, tenant_id: str, session_id: str | None = None,
-                        response_language: str | None = None, lead_id: str | None = None) -> dict:
+                        response_language: str | None = None, lead_id: str | None = None,
+                        on_token: TokenCallback | None = None) -> dict:
     """Run a grounded answer path and emit one stage-by-stage latency trace.
 
     *response_language* (an ISO code such as 'ta'/'hi') makes the reply come back
@@ -188,7 +192,7 @@ async def chat_pipeline(question: str, tenant_id: str, session_id: str | None = 
         else:
             search_query = question
             tailored_system_prompt = "Answer only from the supplied context. Do not invent facts."
-        tailored_system_prompt = (tailored_system_prompt or "") + _language_instruction(response_language) + _HUMAN_TONE_INSTRUCTION
+        tailored_system_prompt = (tailored_system_prompt or "") + _language_instruction(response_language, question) + _HUMAN_TONE_INSTRUCTION
         trace.mark("query_optimize")
 
         context, chunk_ids = await retrieve_context(search_query, tenant_id)
@@ -227,7 +231,14 @@ async def chat_pipeline(question: str, tenant_id: str, session_id: str | None = 
                 "conflicts": conflicts,
             }
         else:
-            answer = await generate_answer(question=question, context=combined_context, system_prompt=tailored_system_prompt)
+            generation_kwargs = {
+                "question": question,
+                "context": combined_context,
+                "system_prompt": tailored_system_prompt,
+            }
+            if on_token is not None:
+                generation_kwargs["on_token"] = on_token
+            answer = await generate_answer(**generation_kwargs)
             trace.mark("answer_llm")
 
             if _settings.RAG_ENABLE_LLM_VERIFICATION:
@@ -245,8 +256,23 @@ async def chat_pipeline(question: str, tenant_id: str, session_id: str | None = 
 
         db = SessionLocal()
         try:
-            conversation = persist_chat_turn(db, tenant_id=tenant_id, session_id=session_id, question=question, answer=result["answer"], citations=result["citations"], confidence=result["confidence"], supported=result["supported"], reason=result["reason"])
+            conversation = persist_chat_turn(db, tenant_id=tenant_id, session_id=session_id, question=question, answer=result["answer"], citations=result["citations"], confidence=result["confidence"], supported=result["supported"], reason=result["reason"], lead_id=lead_id)
             result["conversation_id"] = str(conversation.id)
+            if lead_id:
+                try:
+                    from app.services.knowledge.memory_store import append_lead_nurture_turn
+                    append_lead_nurture_turn(
+                        tenant_id=tenant_id,
+                        lead_id=lead_id,
+                        conversation_id=str(conversation.id),
+                        turn_id=f"{conversation.id}:{conversation.message_count}",
+                        user_text=question,
+                        assistant_text=result["answer"],
+                        channel=conversation.channel or "chat",
+                        citations=result["citations"],
+                    )
+                except Exception as exc:
+                    logger.warning(f"Immediate FerretDB nurturing mirror skipped: {exc}")
         except ConversationScopeError:
             db.rollback()
             raise

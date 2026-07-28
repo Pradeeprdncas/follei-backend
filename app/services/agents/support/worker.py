@@ -8,7 +8,7 @@ fields off chat_pipeline()'s result instead.
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any
+from typing import Any, Awaitable, Callable
 
 from sqlalchemy.orm import Session
 
@@ -42,6 +42,8 @@ def _mark_needs_human(db: Session, conversation_id: str, *, reason: str, detail:
 async def handle_inbound_message(
     db: Session, *, tenant_id: str, text: str, session_id: str | None = None,
     channel: str = "email", response_language: str | None = None,
+    lead_id: str | None = None,
+    on_token: Callable[[str], Awaitable[None]] | None = None,
 ) -> dict[str, Any]:
     """Process one inbound support message end to end.
 
@@ -58,7 +60,22 @@ async def handle_inbound_message(
             db, tenant_id=tenant_id, session_id=session_id, question=text,
             answer=ESCALATION_ACK, citations=[], confidence=0.0, supported=False,
             reason="Customer explicitly requested a human.", channel=channel,
+            lead_id=lead_id,
         )
+        if lead_id:
+            try:
+                from app.services.knowledge.memory_store import append_lead_nurture_turn
+                append_lead_nurture_turn(
+                    tenant_id=tenant_id,
+                    lead_id=lead_id,
+                    conversation_id=str(conversation.id),
+                    turn_id=f"{conversation.id}:{conversation.message_count}",
+                    user_text=text,
+                    assistant_text=ESCALATION_ACK,
+                    channel=channel,
+                )
+            except Exception as exc:
+                logger.warning(f"Support escalation FerretDB mirror skipped: {exc}")
         _mark_needs_human(db, str(conversation.id), reason="explicit_human_request")
         logger.info(f"Support worker: tenant={tenant_id} conversation={conversation.id} escalated (explicit request)")
         return {
@@ -72,6 +89,8 @@ async def handle_inbound_message(
     result = await chat_pipeline(
         question=text, tenant_id=tenant_id, session_id=session_id,
         response_language=response_language,
+        lead_id=lead_id,
+        on_token=on_token,
     )
     conversation_id = result.get("conversation_id")
 

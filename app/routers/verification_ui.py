@@ -26,7 +26,7 @@ from app.config.ferretdb import get_context_database
 from app.config.qdrant import get_qdrant
 from app.config.settings import get_settings
 from app.core.security import get_authenticated_tenant_id
-from app.models.conversations.conversation import Conversation
+from app.models.conversations.conversation import Conversation, Message
 from app.domains.lead_import.models import LeadImportJob, LeadImportRow
 from app.models.leads.lead import Lead
 from app.models.knowledge.indexing_job import IndexingJob
@@ -542,6 +542,26 @@ def tenant_lead_detail(
             {"tenant_id": tenant_id, "lead_id": str(lead_id)},
         )
     )
+    nurture_messages = (
+        db.query(Message)
+        .join(Conversation, Conversation.id == Message.conversation_id)
+        .filter(Conversation.tenant_id == tenant_id, Conversation.lead_id == lead_id)
+        .order_by(Message.created_at.desc())
+        .limit(100)
+        .all()
+    )
+    postgres_nurture_history = [
+        {
+            "id": str(message.id),
+            "conversation_id": str(message.conversation_id),
+            "role": message.role,
+            "speaker": message.speaker,
+            "channel": message.channel,
+            "content": message.content or message.message or "",
+            "created_at": _iso(message.created_at),
+        }
+        for message in nurture_messages
+    ]
 
     memory = get_context(tenant_id=tenant_id, subject_type="lead", subject_id=str(lead_id))
 
@@ -621,6 +641,30 @@ def tenant_lead_detail(
         if str((job.payload or {}).get("lead_import_job_id") or "") in import_job_ids
         and (not (job.payload or {}).get("lead_ids") or str(lead.id) in {str(value) for value in (job.payload or {}).get("lead_ids", [])})
     ][:50]
+    crawl_statuses = [str(job.status or "").lower() for job in linked_ingestion_jobs]
+    crawl_failures = sum(status in {"failed", "dead_letter", "error"} for status in crawl_statuses)
+    crawl_pending = sum(
+        status not in {"completed", "indexed", "ready", "failed", "dead_letter", "error"}
+        for status in crawl_statuses
+    )
+    stored_pre_nurturing = dict((lead.profile_data or {}).get("pre_nurturing") or {})
+    source_urls = sorted({
+        str((job.payload or {}).get("source_uri") or "")
+        for job in linked_ingestion_jobs
+        if (job.payload or {}).get("source_uri")
+    } | {str(value) for value in stored_pre_nurturing.get("urls_queued", []) if value})
+    if not import_rows:
+        pre_nurture_stage = "not_started"
+    elif not linked_ingestion_jobs:
+        pre_nurture_stage = stored_pre_nurturing.get("stage") or "awaiting_crawl_authorization"
+    elif crawl_failures:
+        pre_nurture_stage = "needs_attention"
+    elif crawl_pending:
+        pre_nurture_stage = "processing"
+    elif crawled_memory:
+        pre_nurture_stage = "knowledge_ready"
+    else:
+        pre_nurture_stage = "projection_pending"
 
     return {
         "tenant_id": tenant_id,
@@ -639,6 +683,20 @@ def tenant_lead_detail(
             "created_at": _iso(lead.created_at),
         },
         "conversations": conversations,
+        "postgres_nurture_history": postgres_nurture_history,
+        "pre_nurturing": {
+            **_safe_store_value(stored_pre_nurturing),
+            "system": "System 1",
+            "stage": pre_nurture_stage,
+            "import_rows": len(import_rows),
+            "urls": source_urls,
+            "crawl_jobs": len(linked_ingestion_jobs),
+            "crawl_pending": crawl_pending,
+            "crawl_failed": crawl_failures,
+            "ferretdb_crawled_memories": len(crawled_memory),
+            "qdrant_evidence_points": len(qdrant_evidence),
+            "ready": pre_nurture_stage == "knowledge_ready",
+        },
         "ferretdb_memory": _safe_store_value(memory) if memory else None,
         "ferretdb_import_memory": _safe_store_value(import_memory) if import_memory else None,
         "ferretdb_import_memory_error": import_memory_error,
@@ -846,10 +904,20 @@ def create_user_session(
 
 @router.get("/ui/user/capabilities")
 def user_capabilities(tenant_id: str = Depends(get_authenticated_tenant_id)) -> dict[str, Any]:
+    elevenlabs_tts_active = bool(
+        _settings.ELEVENLABS_API_KEY
+        and _settings.ELEVENLABS_VOICE_ID
+        and not _settings.TTS_SKIP_ELEVENLABS
+    )
     return {
         "tenant_id": tenant_id,
         "speech_to_text": {"provider": _settings.SPEECH_TO_TEXT_PROVIDER, "model": _settings.ELEVENLABS_STT_MODEL, "configured": bool(_settings.ELEVENLABS_API_KEY)},
-        "text_to_speech": {"provider": "elevenlabs", "model": _settings.ELEVENLABS_TTS_MODEL, "configured": bool(_settings.ELEVENLABS_API_KEY and _settings.ELEVENLABS_VOICE_ID)},
+        "text_to_speech": {
+            "provider": "elevenlabs" if elevenlabs_tts_active else "gtts_fallback",
+            "model": _settings.ELEVENLABS_TTS_MODEL if elevenlabs_tts_active else "gtts-co.in",
+            "configured": True,
+            "tamil_voice_configured": bool(_settings.ELEVENLABS_TAMIL_VOICE_ID),
+        },
         "analysis": {
             "scores": ["ICP", "Intent", "Engagement", "Qualification", "Buying Signal", "Relationship"],
             "voice_enrichment": ["Relationship", "overall lead confidence", "emotion fusion"],

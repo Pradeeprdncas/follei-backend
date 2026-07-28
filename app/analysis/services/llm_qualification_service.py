@@ -1,6 +1,6 @@
 """LLM-powered qualification scoring for BANT, MEDDIC, and similar frameworks.
 
-Uses the local Qwen2.5-0.5B model via AIGateway to score each component
+Uses Follei's local Qwen3-4B llama.cpp service to score each component
 of a qualification framework (e.g., Budget, Authority, Need, Timeline for BANT)
 based solely on the conversation transcript — no invented facts.
 """
@@ -80,16 +80,15 @@ class LLMQualificationService:
         prompt = _build_prompt(transcript, framework_name)
 
         try:
-            from app.services.ai import get_ai_service
+            from app.services.ai.local_llm_client import complete
 
-            ai = get_ai_service()
-            raw = await ai.generate(
-                prompt=prompt,
-                system_prompt=_SYSTEM_PROMPT,
-                model_name="qwen2.5-0.5b",
+            raw = await complete(
+                [
+                    {"role": "system", "content": _SYSTEM_PROMPT},
+                    {"role": "user", "content": prompt},
+                ],
                 max_tokens=1024,
                 temperature=0.1,
-                top_p=0.9,
             )
         except Exception as exc:
             logger.warning("LLM qualification generation failed for %s: %s", framework_name, exc)

@@ -20,7 +20,7 @@ audited grounding path is preserved unchanged.
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any
+from typing import Any, Awaitable, Callable
 
 from sqlalchemy.orm import Session
 from loguru import logger
@@ -65,6 +65,7 @@ async def handle_sales_turn(
     session_id: str | None = None,
     channel: str = "voice",
     response_language: str | None = None,
+    on_token: Callable[[str], Awaitable[None]] | None = None,
 ) -> dict[str, Any]:
     """Process one inbound message as a Sales Executive.
 
@@ -73,8 +74,13 @@ async def handle_sales_turn(
     """
     intent = classify_sales_intent(text)
 
+    # Only product discussion returns the generated answer verbatim. Proposal,
+    # closing and objection flows replace or prefix it, so streaming it early
+    # would make the caller hear content that is not the final worker reply.
+    stream_tokens = on_token if intent == "product_discussion" else None
     result = await chat_pipeline(question=text, tenant_id=tenant_id, session_id=session_id,
-                                 response_language=response_language, lead_id=lead_id)
+                                 response_language=response_language, lead_id=lead_id,
+                                 on_token=stream_tokens)
     conversation_id = result.get("conversation_id")
     grounded_answer = result.get("answer") or ""
 

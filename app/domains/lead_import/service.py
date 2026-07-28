@@ -1234,10 +1234,27 @@ class LeadImportService:
             # FerretDB. This is especially important for phone numbers because
             # the legacy operational column is a signed 32-bit integer.
             profile = dict(extracted)
-            lead.profile_data = {**(lead.profile_data or {}), **profile, "import_job_id": str(job.id), "import_row_id": str(row.id)}
+            pre_nurturing = {
+                "system": "System 1",
+                "stage": "awaiting_crawl_authorization",
+                "import_job_id": str(job.id),
+                "urls_queued": [],
+            }
+            lead.profile_data = {
+                **(lead.profile_data or {}),
+                **profile,
+                "import_job_id": str(job.id),
+                "import_row_id": str(row.id),
+                "pre_nurturing": pre_nurturing,
+            }
             upsert_lead_import_memory(
                 tenant_id=str(job.tenant_id), lead_id=str(lead.id), import_job_id=str(job.id),
-                record={"raw_data": row.raw_data or {}, "normalized_data": row.normalized_data or {}, "extracted_data": extracted},
+                record={
+                    "raw_data": row.raw_data or {},
+                    "normalized_data": row.normalized_data or {},
+                    "extracted_data": extracted,
+                    "pre_nurturing": pre_nurturing,
+                },
             )
 
         pre_duplicates = self.repo.count_rows_by_status(job_id, RowStatus.DUPLICATE)

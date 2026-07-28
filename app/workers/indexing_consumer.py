@@ -3,17 +3,89 @@ import sys
 import signal
 from time import sleep
 from datetime import datetime
+from uuid import UUID
 from kafka import TopicPartition
 from kafka.structs import OffsetAndMetadata
 from app.config.kafka import get_consumer, get_producer, ensure_topics
 from app.config.database import SessionLocal
 from app.models.knowledge.indexing_job import IndexingJob
+from app.models.leads.lead import Lead
+from app.config.ferretdb import get_context_database
 from app.config.settings import get_settings
 from app.services.rag.pipelines.indexing import index_document
 from app.services.knowledge.object_storage import materialize_source
 from loguru import logger
 
 _settings = get_settings()
+
+
+def sync_lead_pre_nurturing_status(db, job: IndexingJob) -> None:
+    """Mirror the terminal System 1 crawl state to PostgreSQL and FerretDB."""
+    payload = job.payload or {}
+    import_job_id = str(payload.get("lead_import_job_id") or "")
+    if not import_job_id:
+        return
+    related = [
+        row
+        for row in db.query(IndexingJob).filter(IndexingJob.tenant_id == job.tenant_id).all()
+        if str((row.payload or {}).get("lead_import_job_id") or "") == import_job_id
+    ]
+    if not related:
+        return
+    terminal_ok = {"indexed", "completed", "ready"}
+    terminal_failed = {"failed", "dead_lettered", "dead_letter", "error"}
+    statuses = [str(row.status or "").lower() for row in related]
+    if any(status not in terminal_ok | terminal_failed for status in statuses):
+        stage = "processing"
+    elif any(status in terminal_failed for status in statuses):
+        stage = "needs_attention"
+    else:
+        # FerretDB projection is delivered asynchronously through the outbox.
+        # The verification API promotes this to knowledge_ready only after it
+        # can observe that projection.
+        stage = "indexing_complete"
+    lead_ids = sorted({
+        str(value)
+        for row in related
+        for value in (row.payload or {}).get("lead_ids", [])
+    })
+    state = {
+        "system": "System 1",
+        "stage": stage,
+        "import_job_id": import_job_id,
+        "crawl_jobs": [str(row.id) for row in related],
+        "indexed_jobs": sum(status in terminal_ok for status in statuses),
+        "failed_jobs": sum(status in terminal_failed for status in statuses),
+    }
+    lead_uuids = [UUID(value) for value in lead_ids]
+    leads = (
+        db.query(Lead).filter(
+            Lead.tenant_id == job.tenant_id,
+            Lead.id.in_(lead_uuids),
+        ).all()
+        if lead_uuids
+        else []
+    )
+    for lead in leads:
+        lead.profile_data = {**(lead.profile_data or {}), "pre_nurturing": state}
+    db.commit()
+    try:
+        memory = get_context_database()
+        for lead_id in lead_ids:
+            for collection_name, key in (
+                ("lead_import_memory", {"tenant_id": str(job.tenant_id), "lead_id": lead_id}),
+                (
+                    "tenant_context",
+                    {
+                        "tenant_id": str(job.tenant_id),
+                        "subject_type": "lead",
+                        "subject_id": lead_id,
+                    },
+                ),
+            ):
+                memory[collection_name].update_one(key, {"$set": {"pre_nurturing": state}}, upsert=True)
+    except Exception as exc:
+        logger.warning("System 1 completion status was saved to PostgreSQL but not FerretDB: {}", exc)
 
 
 def failure_destination(attempt_count: int, max_attempts: int) -> tuple[str, str]:
@@ -82,6 +154,7 @@ class IndexingWorker:
                         job.status = "indexed"
                         job.completed_at = datetime.utcnow()
                         db.commit()
+                        sync_lead_pre_nurturing_status(db, job)
                     logger.info(f"Successfully indexed document {data['job_id']}")
                     commit_message(consumer, message)
                 except Exception as e:
@@ -91,6 +164,7 @@ class IndexingWorker:
                         job.status = job_status
                         job.last_error = str(e)[:4000]
                         db.commit()
+                        sync_lead_pre_nurturing_status(db, job)
                     failed_message = {**data, "retry_count": attempts, "last_error": str(e)[:1000]}
                     try:
                         producer = get_producer()
