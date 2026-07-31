@@ -7,11 +7,14 @@ set "COMPOSE=%ROOT%docker-compose.yml"
 set "PORT=8000"
 set "NO_OPEN=0"
 set "NO_PAUSE=0"
+set "SKIP_BROWSER=0"
 
 :parse_args
 if "%~1"=="" goto :args_done
 if /I "%~1"=="--no-open" set "NO_OPEN=1"
 if /I "%~1"=="--no-pause" set "NO_PAUSE=1"
+if /I "%~1"=="--skip-browser" set "SKIP_BROWSER=1"
+if /I "%~1"=="--help" goto :help
 shift
 goto :parse_args
 :args_done
@@ -35,6 +38,21 @@ if not exist "%ROOT%.env" (
   goto :failed
 )
 
+if not exist "%ROOT%alembic.ini" (
+  echo [ERROR] alembic.ini is missing. Database migrations cannot be applied.
+  goto :failed
+)
+
+if not exist "%ROOT%scripts\start_local_runtime.ps1" (
+  echo [ERROR] scripts\start_local_runtime.ps1 is missing. Services cannot be started.
+  goto :failed
+)
+
+if not exist "%ROOT%scripts\run_local_service.bat" (
+  echo [ERROR] scripts\run_local_service.bat is missing. Service tabs cannot be started.
+  goto :failed
+)
+
 echo [1/7] Checking Python dependencies...
 "%PYTHON%" -c "import fastapi,uvicorn,kafka,qdrant_client,pymongo,boto3,playwright; from app.workers.mail_operations_worker import MailOperationsWorker; from app.workers.flow_execution_worker import run as run_flow_worker; from app.services.communications.gmail_auto_reply import GmailAutoReplyService" >nul 2>&1
 if errorlevel 1 (
@@ -49,12 +67,16 @@ if errorlevel 1 (
 )
 
 echo [2/7] Checking the website-ingestion browser runtime...
-"%PYTHON%" -m playwright install chromium >nul
-if errorlevel 1 (
-  echo [WARN] Chromium could not be installed. Normal documents and server-rendered
-  echo        websites still work; JavaScript-only websites may not.
+if "%SKIP_BROWSER%"=="1" (
+  echo [SKIP] Browser runtime check skipped by --skip-browser.
 ) else (
-  echo [OK] Chromium runtime is available.
+  "%PYTHON%" -m playwright install chromium >nul
+  if errorlevel 1 (
+    echo [WARN] Chromium could not be installed. Normal documents and server-rendered
+    echo        websites still work; JavaScript-only websites may not.
+  ) else (
+    echo [OK] Chromium runtime is available.
+  )
 )
 
 echo [3/7] Starting local infrastructure...
@@ -111,6 +133,8 @@ if errorlevel 1 goto :failed
 echo [7/7] Startup complete.
 echo.
 echo Tenant console: http://127.0.0.1:%PORT%/tenant
+echo Flow Builder:   http://127.0.0.1:%PORT%/tenant/flows
+echo Activity monitor: http://127.0.0.1:%PORT%/tenant/activity
 echo Voice console:  http://127.0.0.1:%PORT%/user
 echo API docs:       http://127.0.0.1:%PORT%/docs
 echo Worker output:  visible in Windows Terminal tabs
@@ -129,6 +153,15 @@ echo ==========================================================
 if "%NO_PAUSE%"=="0" pause
 endlocal
 exit /b 1
+
+:help
+echo Usage: start.bat [--no-open] [--no-pause] [--skip-browser]
+echo.
+echo   --no-open       Do not open the tenant and voice pages after startup.
+echo   --no-pause      Do not wait for a key press when the script finishes.
+echo   --skip-browser  Skip the Playwright Chromium check for a faster restart.
+endlocal
+exit /b 0
 
 :infrastructure_ready_now
 powershell -NoProfile -ExecutionPolicy Bypass -Command "$ports=@(55589,6379,9092,27017,9000,6333); foreach($port in $ports){try{$client=[System.Net.Sockets.TcpClient]::new();$task=$client.ConnectAsync('127.0.0.1',$port);if(-not ($task.Wait(750)-and $client.Connected)){$client.Dispose();exit 1};$client.Dispose()}catch{exit 1}};exit 0" >nul 2>&1
