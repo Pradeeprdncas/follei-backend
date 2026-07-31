@@ -196,6 +196,66 @@ def append_lead_nurture_turn(
     return document
 
 
+def append_lead_flow_event(*, tenant_id: str, lead_id: str, enrollment_id: str, node_key: str, event_type: str, data: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Mirror a bounded, readable flow timeline while Postgres stays canonical."""
+    collection = get_context_database()["tenant_context"]
+    key = {"tenant_id": str(tenant_id), "subject_type": "lead", "subject_id": str(lead_id)}
+    existing = collection.find_one(key, {"_id": 0}) or {}
+    history = list(existing.get("flow_history", []))
+    event_id = f"{enrollment_id}:{node_key}:{event_type}:{(data or {}).get('attempt', 1)}"
+    if any(item.get("event_id") == event_id for item in history):
+        return existing
+    history.append({"event_id": event_id, "enrollment_id": str(enrollment_id), "node_key": node_key, "event_type": event_type, "data": json.loads(json.dumps(data or {}, default=str)), "at": _now()})
+    document = {**existing, **key, "flow_history": history[-200:], "last_flow_event": history[-1], "updated_at": _now()}
+    collection.replace_one(key, document, upsert=True)
+    return document
+
+
+def append_lead_outbound_event(
+    *,
+    tenant_id: str,
+    lead_id: str,
+    conversation_id: str,
+    message_id: str,
+    content: str,
+    channel: str,
+    subject: str | None = None,
+    campaign_id: str | None = None,
+) -> dict[str, Any]:
+    """Mirror a one-sided outbound touch while PostgreSQL remains canonical."""
+    collection = get_context_database()["tenant_context"]
+    key = {
+        "tenant_id": str(tenant_id),
+        "subject_type": "lead",
+        "subject_id": str(lead_id),
+    }
+    existing = collection.find_one(key, {"_id": 0}) or {}
+    events = list(existing.get("outbound_history", []))
+    if any(str(item.get("message_id")) == str(message_id) for item in events):
+        return existing
+    events.append({
+        "message_id": str(message_id),
+        "conversation_id": str(conversation_id),
+        "campaign_id": str(campaign_id) if campaign_id else None,
+        "channel": channel,
+        "subject": subject,
+        "content": str(content),
+        "at": _now(),
+    })
+    document = {
+        **existing,
+        **key,
+        "projection_type": existing.get("projection_type") or "lead_nurturing_memory",
+        "canonical_store": "postgres",
+        "outbound_history": events[-100:],
+        "last_outbound_event": events[-1],
+        "outbound_event_count": int(existing.get("outbound_event_count", len(events) - 1)) + 1,
+        "updated_at": _now(),
+    }
+    collection.replace_one(key, document, upsert=True)
+    return document
+
+
 def seed_onboarding_context(*, tenant_id: str, industry: str | None, goals: list[str], contact_channels: list[str]) -> dict[str, Any]:
     """One-time seed of the tenant-level FerretDB context record from onboarding answers.
 

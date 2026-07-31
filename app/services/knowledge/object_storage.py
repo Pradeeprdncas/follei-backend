@@ -49,6 +49,16 @@ def store_source(local_path: str | Path, *, tenant_id: str, job_id: str) -> str 
     return key
 
 
+def read_object(object_key: str) -> bytes:
+    if not enabled():
+        raise FileNotFoundError("Object storage is disabled")
+    response = _get_client().get_object(Bucket=_settings.OBJECT_STORAGE_BUCKET, Key=object_key)
+    try:
+        return response["Body"].read()
+    finally:
+        response["Body"].close()
+
+
 def source_available(payload: dict) -> bool:
     local_path = payload.get("file_path")
     if local_path and Path(local_path).is_file():

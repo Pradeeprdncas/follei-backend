@@ -9,6 +9,9 @@ from app.api.websocket_handler import router as websocket_router
 from app.api.conversations.analysis import router as conversation_analysis_router
 from app.routers.voice_test import router as voice_test_router
 from app.routers.verification_ui import router as verification_ui_router
+from app.routers.flows import router as flows_router, assets_router
+from app.routers.email_connections import router as email_connections_router
+from app.api.campaigns import router as campaigns_router
 from app.services.rag.vectorstore.qdrant import ensure_collection
 from app.config.kafka import ensure_topics
 from loguru import logger
@@ -17,8 +20,9 @@ from loguru import logger
 def create_app() -> FastAPI:
     app = FastAPI(title="Follei Backend", description="Enterprise RAG and business workforce API", version="1.0.0")
     app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=False, allow_methods=["*"], allow_headers=["*"])
-    for router in (upload_router, chat_router, health_router, knowledge_review_router, orchestrator_router, conversation_memory_router, onboarding_router, channels_email_router, website_ingestion_router, websocket_router, voice_test_router, verification_ui_router):
+    for router in (upload_router, chat_router, health_router, knowledge_review_router, orchestrator_router, conversation_memory_router, onboarding_router, channels_email_router, website_ingestion_router, websocket_router, voice_test_router, verification_ui_router, email_connections_router, flows_router, assets_router):
         app.include_router(router)
+    app.include_router(campaigns_router, prefix="/api/v1")
 
     # Restored working domain API surface from backup-before-cleanup.
     from app.routers import api_v1, conversation, customers, integrations, leads, message, tools, database_crud

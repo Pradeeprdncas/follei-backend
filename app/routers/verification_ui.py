@@ -26,7 +26,7 @@ from app.config.ferretdb import get_context_database
 from app.config.qdrant import get_qdrant
 from app.config.settings import get_settings
 from app.core.security import get_authenticated_tenant_id
-from app.models.conversations.conversation import Conversation, Message
+from app.models.conversations.conversation import Conversation, Message, MessageAttachment
 from app.domains.lead_import.models import LeadImportJob, LeadImportRow
 from app.models.leads.lead import Lead
 from app.models.knowledge.indexing_job import IndexingJob
@@ -143,6 +143,152 @@ def _merge_voice_session_memory(*, tenant_id: str, canonical_lead_id: str, alias
 @router.get("/tenant", include_in_schema=False)
 def tenant_console() -> FileResponse:
     return FileResponse(_STATIC / "tenant_console.html")
+
+@router.get("/tenant/flows", include_in_schema=False)
+def flow_builder_console() -> FileResponse:
+    return FileResponse(_STATIC / "flow_builder.html")
+
+@router.get("/tenant/activity", include_in_schema=False)
+def tenant_activity_console() -> FileResponse:
+    return FileResponse(_STATIC / "tenant_activity.html")
+
+
+@router.get("/ui/tenant/automation-activity")
+def tenant_automation_activity(
+    limit: int = Query(default=100, ge=10, le=500),
+    lead_id: UUID | None = Query(default=None),
+    tenant_id: str = Depends(get_authenticated_tenant_id),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Tenant-scoped proof of every automated flow and communication action."""
+    from app.models.campaigns import Campaign, CampaignMessage, InboundEmail, OutboxMessage, ProviderLog
+    from app.models.flows import FlowDefinition, FlowEnrollment, FlowExecutionStep
+
+    leads = db.query(Lead).filter(Lead.tenant_id == tenant_id).all()
+    lead_map = {
+        str(lead.id): {
+            "id": str(lead.id),
+            "name": " ".join(filter(None, [lead.first_name, lead.last_name])) or lead.email,
+            "email": lead.email,
+            "company": lead.company,
+        }
+        for lead in leads
+    }
+    selected_lead = str(lead_id) if lead_id else None
+    enrollment_query = db.query(FlowEnrollment).filter(FlowEnrollment.tenant_id == tenant_id)
+    step_query = db.query(FlowExecutionStep).filter(FlowExecutionStep.tenant_id == tenant_id)
+    outbox_query = db.query(OutboxMessage).filter(OutboxMessage.tenant_id == tenant_id)
+    inbound_query = db.query(InboundEmail).filter(InboundEmail.tenant_id == tenant_id)
+    message_query = (
+        db.query(Message, Conversation)
+        .join(Conversation, Conversation.id == Message.conversation_id)
+        .filter(Message.tenant_id == tenant_id)
+    )
+    if lead_id:
+        enrollment_query = enrollment_query.filter(FlowEnrollment.lead_id == lead_id)
+        step_query = step_query.filter(FlowExecutionStep.lead_id == lead_id)
+        outbox_query = outbox_query.filter(OutboxMessage.metadata_["lead_id"].astext == str(lead_id))
+        inbound_query = inbound_query.filter(InboundEmail.lead_id == lead_id)
+        message_query = message_query.filter(Conversation.lead_id == lead_id)
+
+    enrollments = enrollment_query.order_by(FlowEnrollment.created_at.desc()).limit(limit).all()
+    steps = step_query.order_by(FlowExecutionStep.created_at.desc()).limit(limit).all()
+    outbox = outbox_query.order_by(OutboxMessage.created_at.desc()).limit(limit).all()
+    inbound = inbound_query.order_by(InboundEmail.received_at.desc()).limit(limit).all()
+    conversation_rows = message_query.order_by(Message.created_at.desc()).limit(limit).all()
+    provider_logs = (
+        db.query(ProviderLog)
+        .filter(ProviderLog.tenant_id == tenant_id)
+        .order_by(ProviderLog.created_at.desc())
+        .limit(limit)
+        .all()
+    )
+    campaigns = db.query(Campaign).filter(Campaign.tenant_id == tenant_id).order_by(Campaign.created_at.desc()).limit(limit).all()
+    campaign_messages = (
+        db.query(CampaignMessage)
+        .join(Campaign, Campaign.id == CampaignMessage.campaign_id)
+        .filter(Campaign.tenant_id == tenant_id)
+        .order_by(CampaignMessage.created_at.desc())
+        .limit(limit)
+        .all()
+    )
+    if selected_lead:
+        campaign_messages = [item for item in campaign_messages if str(item.lead_id) == selected_lead]
+
+    flow_ids = {item.flow_id for item in enrollments}
+    flow_names = {
+        str(item.id): item.name
+        for item in db.query(FlowDefinition).filter(FlowDefinition.id.in_(flow_ids)).all()
+    } if flow_ids else {}
+    status_counts: dict[str, int] = Counter(str(item.status) for item in outbox)
+    return {
+        "tenant_id": tenant_id,
+        "generated_at": datetime.utcnow().isoformat(),
+        "summary": {
+            "active_enrollments": sum(item.status in ("running", "waiting") for item in enrollments),
+            "completed_enrollments": sum(item.status == "completed" for item in enrollments),
+            "queued_messages": sum(item.status in ("pending", "processing") for item in outbox),
+            "sent_messages": status_counts.get("sent", 0),
+            "failed_messages": sum(item.status in ("failed", "dead_letter") for item in outbox),
+            "inbound_replies": len(inbound),
+        },
+        "leads": list(lead_map.values()),
+        "enrollments": [{
+            "id": str(item.id), "public_id": item.public_id, "lead": lead_map.get(str(item.lead_id)), "flow_id": str(item.flow_id),
+            "flow_name": flow_names.get(str(item.flow_id)), "status": item.status,
+            "current_node_key": item.current_node_key, "current_node_id": item.current_node_id,
+            "enrollment_source": item.enrollment_source, "next_run_at": _iso(item.next_run_at),
+            "stop_reason": item.stop_reason, "last_error": item.last_error, "created_at": _iso(item.created_at),
+        } for item in enrollments],
+        "flow_steps": [{
+            "id": str(item.id), "public_id": item.public_id, "lead": lead_map.get(str(item.lead_id)), "enrollment_id": str(item.enrollment_id),
+            "node_key": item.node_key, "node_id": item.node_id, "action_type": item.action_type, "status": item.status,
+            "attempt": item.attempt, "output": _safe_store_value(item.output or {}),
+            "error": item.error, "created_at": _iso(item.created_at),
+        } for item in steps],
+        "outbox": [{
+            "id": str(item.id), "lead": lead_map.get(str((item.metadata_ or {}).get("lead_id") or "")),
+            "channel": item.channel, "recipient": item.recipient, "subject": item.subject, "body": item.body,
+            "status": item.status, "retry_count": item.retry_count, "max_retries": item.max_retries,
+            "last_error": item.last_error, "provider": item.provider,
+            "provider_message_id": item.provider_message_id, "provider_response": _safe_store_value(item.provider_response or {}),
+            "scheduled_at": _iso(item.scheduled_at), "sent_at": _iso(item.sent_at), "created_at": _iso(item.created_at),
+            "flow_enrollment_id": (item.metadata_ or {}).get("flow_enrollment_id"),
+            "campaign_id": str(item.campaign_id) if item.campaign_id else None,
+            "asset_ids": list((item.metadata_ or {}).get("asset_ids") or []),
+        } for item in outbox],
+        "inbound": [{
+            "id": str(item.id), "lead": lead_map.get(str(item.lead_id)) if item.lead_id else None,
+            "from_email": item.from_email, "to_email": item.to_email, "subject": item.subject,
+            "body": item.body, "provider": item.provider, "status": item.status,
+            "provider_message_id": item.provider_message_id, "received_at": _iso(item.received_at),
+        } for item in inbound],
+        "conversations": [{
+            "id": str(message.id), "conversation_id": str(conversation.id),
+            "lead": lead_map.get(str(conversation.lead_id)) if conversation.lead_id else None,
+            "channel": message.channel or conversation.channel, "direction": message.direction,
+            "role": message.role, "content": message.content or message.message or "",
+            "created_at": _iso(message.created_at),
+        } for message, conversation in conversation_rows],
+        "campaigns": [{
+            "id": str(item.id), "name": item.name, "status": item.status.value if hasattr(item.status, "value") else str(item.status),
+            "subject": item.subject, "total_recipients": item.total_recipients, "sent_count": item.sent_count,
+            "failed_count": item.failed_count, "start_date": _iso(item.start_date), "created_at": _iso(item.created_at),
+        } for item in campaigns],
+        "campaign_messages": [{
+            "id": str(item.id), "campaign_id": str(item.campaign_id), "lead": lead_map.get(str(item.lead_id)),
+            "recipient": item.recipient, "subject": item.subject, "body": item.body,
+            "status": item.status.value if hasattr(item.status, "value") else str(item.status),
+            "provider_message_id": item.provider_message_id, "error_message": item.error_message,
+            "sent_at": _iso(item.sent_at), "created_at": _iso(item.created_at),
+        } for item in campaign_messages],
+        "provider_logs": [{
+            "id": str(item.id), "provider": item.provider, "channel": item.channel,
+            "recipient": item.recipient, "status": item.status, "success": item.success,
+            "latency_ms": item.latency_ms, "retry_count": item.retry_count,
+            "error_message": item.error_message, "created_at": _iso(item.created_at),
+        } for item in provider_logs],
+    }
 
 
 @router.get("/user", include_in_schema=False)
@@ -490,6 +636,17 @@ def tenant_leads(
         .all()
     )
     leads = [lead for lead in candidates if not (lead.profile_data or {}).get("merged_into")][:limit]
+    from app.models.flows import FlowEnrollment
+    enrollment_rows = (
+        db.query(FlowEnrollment)
+        .filter(FlowEnrollment.tenant_id == tenant_id, FlowEnrollment.lead_id.in_([lead.id for lead in leads]))
+        .order_by(FlowEnrollment.updated_at.desc())
+        .all()
+        if leads else []
+    )
+    enrollment_by_lead: dict[str, FlowEnrollment] = {}
+    for enrollment in enrollment_rows:
+        enrollment_by_lead.setdefault(str(enrollment.lead_id), enrollment)
     return {
         "tenant_id": tenant_id,
         "leads": [
@@ -502,6 +659,19 @@ def tenant_leads(
                 "status": lead.status,
                 "current_score": lead.current_score,
                 "current_temperature": lead.current_temperature,
+                "flow": (
+                    {
+                        "enrollment_id": str(enrollment_by_lead[str(lead.id)].id),
+                        "enrollment_public_id": enrollment_by_lead[str(lead.id)].public_id,
+                        "status": enrollment_by_lead[str(lead.id)].status,
+                        "current_node_key": enrollment_by_lead[str(lead.id)].current_node_key,
+                        "current_node_id": enrollment_by_lead[str(lead.id)].current_node_id,
+                        "next_run_at": _iso(enrollment_by_lead[str(lead.id)].next_run_at),
+                        "stop_reason": enrollment_by_lead[str(lead.id)].stop_reason,
+                    }
+                    if str(lead.id) in enrollment_by_lead
+                    else {"status": "not_enrolled"}
+                ),
                 "last_analysis_at": _iso(lead.last_analysis_at),
                 "created_at": _iso(lead.created_at),
             }
@@ -665,6 +835,10 @@ def tenant_lead_detail(
         pre_nurture_stage = "knowledge_ready"
     else:
         pre_nurture_stage = "projection_pending"
+    from app.models.flows import FlowEnrollment, FlowExecutionStep
+    flow_enrollments = db.query(FlowEnrollment).filter_by(tenant_id=tenant_id, lead_id=lead.id).order_by(FlowEnrollment.created_at.desc()).all()
+    enrollment_ids = [item.id for item in flow_enrollments]
+    flow_steps = db.query(FlowExecutionStep).filter(FlowExecutionStep.enrollment_id.in_(enrollment_ids)).order_by(FlowExecutionStep.created_at.desc()).limit(200).all() if enrollment_ids else []
 
     return {
         "tenant_id": tenant_id,
@@ -683,6 +857,8 @@ def tenant_lead_detail(
             "created_at": _iso(lead.created_at),
         },
         "conversations": conversations,
+        "flow_enrollments": [{"id": str(item.id), "public_id": item.public_id, "flow_id": str(item.flow_id), "status": item.status, "current_node_key": item.current_node_key, "current_node_id": item.current_node_id, "next_run_at": _iso(item.next_run_at), "stop_reason": item.stop_reason, "created_at": _iso(item.created_at)} for item in flow_enrollments],
+        "flow_timeline": [{"id": str(item.id), "public_id": item.public_id, "enrollment_id": str(item.enrollment_id), "node_key": item.node_key, "node_id": item.node_id, "action_type": item.action_type, "status": item.status, "attempt": item.attempt, "output": _safe_store_value(item.output or {}), "error": item.error, "created_at": _iso(item.created_at)} for item in flow_steps],
         "postgres_nurture_history": postgres_nurture_history,
         "pre_nurturing": {
             **_safe_store_value(stored_pre_nurturing),
@@ -741,6 +917,138 @@ def tenant_lead_detail(
                 "created_at": _iso(job.created_at),
             }
             for job in linked_ingestion_jobs
+        ],
+    }
+
+
+@router.get("/ui/tenant/leads/{lead_id}/conversations")
+def tenant_lead_conversations(
+    lead_id: UUID,
+    channel: str | None = Query(default=None),
+    limit: int = Query(default=50, ge=1, le=100),
+    tenant_id: str = Depends(get_authenticated_tenant_id),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """List tenant-scoped conversation threads for one lead."""
+    lead = db.query(Lead.id).filter(
+        Lead.id == lead_id,
+        Lead.tenant_id == tenant_id,
+    ).first()
+    if not lead:
+        raise HTTPException(status_code=404, detail="Lead not found for this tenant")
+
+    query = db.query(Conversation).filter(
+        Conversation.tenant_id == tenant_id,
+        Conversation.lead_id == lead_id,
+    )
+    if channel:
+        query = query.filter(Conversation.channel == channel.strip().lower())
+    conversations = (
+        query.order_by(
+            Conversation.last_activity_at.desc().nullslast(),
+            Conversation.created_at.desc(),
+        )
+        .limit(limit)
+        .all()
+    )
+    return {
+        "tenant_id": tenant_id,
+        "lead_id": str(lead_id),
+        "conversations": [
+            {
+                "id": str(item.id),
+                "public_id": item.public_id,
+                "title": item.title,
+                "channel": item.channel,
+                "status": item.status,
+                "summary": item.summary,
+                "message_count": item.message_count,
+                "started_at": _iso(item.started_at),
+                "last_activity_at": _iso(item.last_activity_at),
+            }
+            for item in conversations
+        ],
+    }
+
+
+@router.get("/ui/tenant/leads/{lead_id}/conversations/{conversation_id}")
+def tenant_lead_conversation(
+    lead_id: UUID,
+    conversation_id: UUID,
+    limit: int = Query(default=250, ge=1, le=500),
+    tenant_id: str = Depends(get_authenticated_tenant_id),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Return a complete, tenant-safe transcript with attachment metadata."""
+    conversation = db.query(Conversation).filter(
+        Conversation.id == conversation_id,
+        Conversation.tenant_id == tenant_id,
+        Conversation.lead_id == lead_id,
+    ).first()
+    if not conversation:
+        raise HTTPException(status_code=404, detail="Conversation not found for this lead")
+
+    messages = (
+        db.query(Message)
+        .filter(
+            Message.tenant_id == tenant_id,
+            Message.conversation_id == conversation.id,
+        )
+        .order_by(Message.sequence_number.asc().nullslast(), Message.created_at.asc())
+        .limit(limit)
+        .all()
+    )
+    message_ids = [message.id for message in messages]
+    attachment_rows = (
+        db.query(MessageAttachment)
+        .filter(
+            MessageAttachment.tenant_id == tenant_id,
+            MessageAttachment.message_id.in_(message_ids),
+        )
+        .order_by(MessageAttachment.created_at.asc())
+        .all()
+        if message_ids
+        else []
+    )
+    attachments: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for item in attachment_rows:
+        metadata = dict(item.metadata_ or {})
+        attachments[str(item.message_id)].append({
+            "id": str(item.id),
+            "file_name": item.file_name,
+            "content_type": item.content_type,
+            "size_bytes": metadata.get("size_bytes"),
+            "ingestion_job_id": metadata.get("ingestion_job_id"),
+            "ingestion_status": metadata.get("ingestion_status"),
+            "created_at": _iso(item.created_at),
+        })
+
+    return {
+        "tenant_id": tenant_id,
+        "lead_id": str(lead_id),
+        "conversation": {
+            "id": str(conversation.id),
+            "public_id": conversation.public_id,
+            "title": conversation.title,
+            "channel": conversation.channel,
+            "status": conversation.status,
+            "summary": conversation.summary,
+            "message_count": conversation.message_count,
+            "started_at": _iso(conversation.started_at),
+            "last_activity_at": _iso(conversation.last_activity_at),
+        },
+        "messages": [
+            {
+                "id": str(message.id),
+                "role": message.role,
+                "speaker": message.speaker,
+                "direction": message.direction,
+                "channel": message.channel,
+                "content": message.content or message.message or "",
+                "created_at": _iso(message.created_at),
+                "attachments": attachments.get(str(message.id), []),
+            }
+            for message in messages
         ],
     }
 

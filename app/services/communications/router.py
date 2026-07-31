@@ -73,7 +73,13 @@ class CommunicationRouter:
             if alt and alt.is_configured():
                 provider = alt
 
-        if not provider.is_configured():
+        tenant_id = (metadata or {}).get("tenant_id")
+        configured = (
+            provider.is_configured_for(tenant_id)
+            if channel == "email" and hasattr(provider, "is_configured_for")
+            else provider.is_configured()
+        )
+        if not configured:
             raise ProviderNotConfigured(f"No configured provider for channel: {channel}")
 
         try:

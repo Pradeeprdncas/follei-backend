@@ -13,6 +13,7 @@ from app.schemas.campaign import (
     CampaignInboundWebhookResponse, CampaignMetricCreate, CampaignMetricResponse,
 )
 from app.services.campaigns.service import CampaignService
+from app.core.security import get_authenticated_tenant_id, require_matching_tenant
 
 router = APIRouter(prefix="/campaigns", tags=["Campaigns"])
 metrics_router = APIRouter(prefix="/campaign-metrics", tags=["Campaigns"])
@@ -22,8 +23,11 @@ inbound_router = APIRouter(prefix="/email/inbound", tags=["Campaigns"])
 _ALLOWED_REDIRECT_DOMAINS: set[str] | None = None
 
 
-def _svc(db=Depends(get_db)) -> CampaignService:
-    return CampaignService(db)
+def _svc(
+    db=Depends(get_db),
+    tenant_id: str = Depends(get_authenticated_tenant_id),
+) -> CampaignService:
+    return CampaignService(db, tenant_id=tenant_id)
 
 
 def _validate_redirect_url(url: str) -> str:
@@ -43,7 +47,12 @@ def _validate_redirect_url(url: str) -> str:
 # ── CRUD ─────────────────────────────────────────────────────────────
 
 @router.post("", response_model=CampaignResponse, status_code=status.HTTP_201_CREATED)
-def create_campaign(payload: CampaignCreateRequest, svc: CampaignService = Depends(_svc)) -> CampaignResponse:
+def create_campaign(
+    payload: CampaignCreateRequest,
+    tenant_id: str = Depends(get_authenticated_tenant_id),
+    svc: CampaignService = Depends(_svc),
+) -> CampaignResponse:
+    require_matching_tenant(payload.tenant_id, tenant_id)
     return svc.create(payload)
 
 
@@ -55,7 +64,9 @@ def list_campaigns(
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=20, ge=1, le=100),
     svc: CampaignService = Depends(_svc),
+    authenticated_tenant_id: str = Depends(get_authenticated_tenant_id),
 ) -> CampaignListResponse:
+    require_matching_tenant(tenant_id, authenticated_tenant_id)
     return svc.list(tenant_id, status_filter, type_filter, page, page_size)
 
 

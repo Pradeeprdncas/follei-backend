@@ -43,7 +43,7 @@ class OutboxService:
             campaign_id=campaign_id,
             campaign_message_id=campaign_message_id,
             conversation_message_id=conversation_message_id,
-            metadata_=metadata or {},
+            metadata_={"tenant_id": str(tenant_id), **(metadata or {})},
             status="pending", priority=priority,
             max_retries=max_retries,
         )
@@ -70,6 +70,7 @@ class OutboxService:
             if result.success:
                 self.repo.mark_sent(outbox_id, result.provider_message_id,
                                      msg.channel, result.raw_response)
+                self._mark_linked_delivery(msg, result)
                 publish_event(EVENT_MESSAGE_SENT, str(msg.tenant_id), {
                     "outbox_id": outbox_id,
                     "provider_message_id": result.provider_message_id,
@@ -87,6 +88,39 @@ class OutboxService:
                 "outbox_id": outbox_id, "error": str(e),
             })
             return SendResult(success=False, error=str(e))
+
+    def _mark_linked_delivery(self, msg: OutboxMessage, result: SendResult) -> None:
+        """Keep campaign and canonical conversation delivery state in sync."""
+        from app.models.campaigns import Campaign, CampaignMessage, CampaignStatus, DeliveryStatus
+        from app.models.conversations.conversation import MessageDeliveryStatus
+
+        if msg.campaign_message_id:
+            campaign_message = self.repo.db.get(CampaignMessage, msg.campaign_message_id)
+            if campaign_message:
+                campaign_message.status = DeliveryStatus.SENT
+                campaign_message.sent_at = datetime.utcnow()
+                campaign_message.provider_message_id = result.provider_message_id
+                campaign = self.repo.db.get(Campaign, campaign_message.campaign_id)
+                if campaign:
+                    campaign.sent_count = (campaign.sent_count or 0) + 1
+                    remaining = self.repo.db.query(CampaignMessage).filter(
+                        CampaignMessage.campaign_id == campaign.id,
+                        CampaignMessage.status.in_((DeliveryStatus.PENDING, DeliveryStatus.QUEUED)),
+                    ).count()
+                    if remaining == 0:
+                        campaign.status = CampaignStatus.COMPLETED
+                        campaign.processing_started_at = None
+                        campaign.end_date = datetime.utcnow()
+        if msg.conversation_message_id:
+            self.repo.db.add(MessageDeliveryStatus(
+                tenant_id=msg.tenant_id,
+                message_id=msg.conversation_message_id,
+                status="sent",
+                provider=result.raw_response.get("provider") if result.raw_response else msg.provider,
+                delivered_at=datetime.utcnow(),
+                metadata_={"provider_message_id": result.provider_message_id},
+            ))
+        self.repo.db.commit()
 
     def process_pending(self, batch_size: int = 50) -> list[str]:
         """Pick next pending batch, return their IDs for worker dispatch."""

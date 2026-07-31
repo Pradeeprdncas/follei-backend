@@ -176,9 +176,20 @@ class Settings(BaseSettings):
     GMAIL_SMTP_PORT: int = 465
     GMAIL_POLL_INTERVAL_SECONDS: int = 60
     GMAIL_AUTO_REPLY_ENABLED: bool = True
+    GMAIL_CLIENT_ID: str = Field(default="")
+    GMAIL_CLIENT_SECRET: str = Field(default="")
+    GMAIL_OAUTH_REDIRECT_URI: str = Field(
+        default="http://127.0.0.1:8000/api/email-connections/gmail/oauth/callback"
+    )
+    GMAIL_OAUTH_SUCCESS_URL: str = Field(default="http://127.0.0.1:8000/tenant")
+    GMAIL_OAUTH_STATE_TTL_SECONDS: int = 600
     # Optional fallback tenant when an inbound sender matches no known lead.
     # Empty means "skip senders we can't map to a tenant".
     GMAIL_DEFAULT_TENANT_ID: str = Field(default="")
+    # Encrypts per-tenant Gmail app passwords and Brevo keys stored in
+    # PostgreSQL. Empty falls back to SECRET_KEY for local development.
+    EMAIL_CREDENTIAL_ENCRYPTION_KEY: str = Field(default="")
+    EMAIL_ATTACHMENT_MAX_BYTES: int = 10 * 1024 * 1024
 
     # -- SMS provider selection: "twilio" (default) or "brevo" --
     SMS_PROVIDER: str = "twilio"

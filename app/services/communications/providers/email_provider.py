@@ -15,12 +15,37 @@ class EmailProvider(CommunicationProvider):
                    body: str = "", html_body: str | None = None,
                    sender_name: str | None = None,
                    metadata: dict | None = None) -> SendResult:
+        metadata = metadata or {}
+        attachments = []
+        for item in metadata.get("attachments") or []:
+            if isinstance(item, dict) and item.get("content_bytes") and item.get("name"):
+                attachments.append(item)
+        asset_ids = [str(value) for value in metadata.get("asset_ids") or []]
+        if asset_ids:
+            from uuid import UUID
+            from app.database.session import SessionLocal
+            from app.models.flows import CommunicationAsset
+            from app.services.knowledge.object_storage import read_object
+            with SessionLocal() as db:
+                for asset_id in asset_ids:
+                    try:
+                        asset = db.query(CommunicationAsset).filter_by(
+                            id=UUID(asset_id), tenant_id=UUID(str(metadata.get("tenant_id"))), status="ready"
+                        ).first()
+                        if asset:
+                            attachments.append({"name": asset.filename, "content_bytes": read_object(asset.object_key), "content_type": asset.content_type})
+                    except Exception as exc:
+                        logger.warning("Unable to attach communication asset {}: {}", asset_id, exc)
         result = await self._inner.send_email(
             to_email=recipient,
-            to_name=(metadata or {}).get("to_name", recipient.split("@")[0]),
+            to_name=metadata.get("to_name", recipient.split("@")[0]),
             subject=subject or "",
             body=body,
             html_body=html_body or body,
+            reply_to=metadata.get("reply_to"),
+            tenant_id=metadata.get("tenant_id"),
+            attachments=attachments or None,
+            message_headers=metadata.get("headers"),
         )
         if result.get("success"):
             return SendResult(
@@ -88,3 +113,13 @@ class EmailProvider(CommunicationProvider):
 
     def is_configured(self) -> bool:
         return bool(self._settings.BREVO_API_KEY)
+
+    def is_configured_for(self, tenant_id: str | None) -> bool:
+        if self.is_configured():
+            return True
+        if not tenant_id:
+            return False
+        from app.database.session import SessionLocal
+        from app.services.communications.email_connections import brevo_account, has_gmail_oauth_sender
+        with SessionLocal() as db:
+            return has_gmail_oauth_sender(db, tenant_id) or brevo_account(db, tenant_id) is not None

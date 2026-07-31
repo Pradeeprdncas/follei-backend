@@ -174,6 +174,7 @@ _HUMAN_TONE_INSTRUCTION = (
 
 async def chat_pipeline(question: str, tenant_id: str, session_id: str | None = None,
                         response_language: str | None = None, lead_id: str | None = None,
+                        channel: str = "chat",
                         on_token: TokenCallback | None = None) -> dict:
     """Run a grounded answer path and emit one stage-by-stage latency trace.
 
@@ -256,7 +257,19 @@ async def chat_pipeline(question: str, tenant_id: str, session_id: str | None = 
 
         db = SessionLocal()
         try:
-            conversation = persist_chat_turn(db, tenant_id=tenant_id, session_id=session_id, question=question, answer=result["answer"], citations=result["citations"], confidence=result["confidence"], supported=result["supported"], reason=result["reason"], lead_id=lead_id)
+            conversation = persist_chat_turn(
+                db,
+                tenant_id=tenant_id,
+                session_id=session_id,
+                question=question,
+                answer=result["answer"],
+                citations=result["citations"],
+                confidence=result["confidence"],
+                supported=result["supported"],
+                reason=result["reason"],
+                channel=channel,
+                lead_id=lead_id,
+            )
             result["conversation_id"] = str(conversation.id)
             if lead_id:
                 try:

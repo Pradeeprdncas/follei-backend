@@ -11,6 +11,7 @@ from app.models.campaigns import (
     CampaignStatus, CampaignType, DeliveryStatus,
 )
 from app.models.leads.lead import Lead
+from app.models.conversations.conversation import Message
 from app.repositories.campaign import CampaignRepository
 from app.repositories.campaign_message import CampaignMessageRepository
 from app.repositories.campaign_metric import CampaignMetricRepository
@@ -27,6 +28,8 @@ from app.services.communications.outbox import OutboxService
 from app.services.communications.retry import RetryEngine
 from app.services.communications.events import publish_event
 from app.services.communications.streams.redis_streams import push_tracking_event
+from app.services.knowledge.conversation_memory import resolve_conversation
+from app.services.knowledge.memory_store import append_lead_outbound_event
 from app.events.base import (
     EVENT_CAMPAIGN_CREATED, EVENT_CAMPAIGN_SCHEDULED,
     EVENT_CAMPAIGN_STARTED, EVENT_CAMPAIGN_PAUSED,
@@ -84,8 +87,10 @@ def _message_to_response(m: CampaignMessage) -> CampaignMessageResponse:
 
 class CampaignService:
     def __init__(self, db: Session, router: CommunicationRouter | None = None,
-                 outbox_service: OutboxService | None = None):
+                 outbox_service: OutboxService | None = None,
+                 tenant_id: str | None = None):
         self.db = db
+        self.tenant_id = tenant_id
         self.campaign_repo = CampaignRepository(db)
         self.message_repo = CampaignMessageRepository(db)
         self.metric_repo = CampaignMetricRepository(db)
@@ -107,14 +112,129 @@ class CampaignService:
             CampaignType.MULTI_CHANNEL: "email",
         }.get(campaign_type, "email")
 
+    @staticmethod
+    def _lead_name(lead: Lead) -> str:
+        return " ".join(filter(None, [lead.first_name, lead.last_name])).strip() or "there"
+
+    @staticmethod
+    def _personalize(value: str | None, lead: Lead) -> str | None:
+        if value is None:
+            return None
+        return value.replace("{{name}}", CampaignService._lead_name(lead))
+
+    def _select_leads(
+        self,
+        campaign: Campaign,
+        *,
+        preselected_ids: set[str] | None = None,
+    ) -> list[Lead]:
+        audience = dict(campaign.target_audience or {})
+        filters = dict(audience.get("filters") or {})
+        manual_ids = {
+            str(value) for value in (audience.get("manual_lead_ids") or [])
+            if value
+        }
+        if not manual_ids and preselected_ids:
+            manual_ids = preselected_ids
+        statuses = {str(value).lower() for value in (filters.get("status") or []) if value}
+        leads = self.lead_repo.get_by_tenant(campaign.tenant_id)
+        selected: list[Lead] = []
+        for lead in leads:
+            profile = dict(lead.profile_data or {})
+            manually_selected = bool(manual_ids and str(lead.id) in manual_ids)
+            if profile.get("merged_into"):
+                continue
+            if manual_ids and str(lead.id) not in manual_ids:
+                continue
+            if statuses and str(lead.status or "").lower() not in statuses:
+                continue
+            if campaign.type in (CampaignType.EMAIL, CampaignType.MULTI_CHANNEL) and not lead.email:
+                continue
+            if profile.get("email_suppressed") or profile.get("unsubscribed"):
+                continue
+            # Inbound contact permits a one-to-one reply, not bulk marketing.
+            if (
+                profile.get("source") == "inbound_email"
+                and profile.get("marketing_consent") is not True
+                and not manually_selected
+            ):
+                continue
+            if profile.get("marketing_consent") is False and not manually_selected:
+                continue
+            selected.append(lead)
+        return selected
+
+    def _persist_outbound_message(
+        self,
+        *,
+        campaign: Campaign,
+        lead: Lead,
+        subject: str | None,
+        body: str,
+        channel: str,
+    ) -> Message:
+        conversation = resolve_conversation(
+            self.db,
+            tenant_id=campaign.tenant_id,
+            session_id=f"campaign:{campaign.id}:{lead.id}",
+            title=subject or campaign.name,
+            channel=channel,
+            lead_id=lead.id,
+        )
+        sequence = (conversation.message_count or 0) + 1
+        message = Message(
+            tenant_id=campaign.tenant_id,
+            conversation_id=conversation.id,
+            role="assistant",
+            content=body,
+            message=body,
+            sender_type="agent",
+            message_type="text",
+            direction="outbound",
+            speaker="follei",
+            channel=channel,
+            sequence_number=sequence,
+            metadata_={
+                "campaign_id": str(campaign.id),
+                "campaign_name": campaign.name,
+                "subject": subject,
+                "delivery_status": "queued",
+            },
+        )
+        self.db.add(message)
+        conversation.message_count = sequence
+        conversation.last_activity_at = datetime.utcnow()
+        conversation.last_message_at = conversation.last_activity_at
+        self.db.flush()
+        try:
+            append_lead_outbound_event(
+                tenant_id=str(campaign.tenant_id),
+                lead_id=str(lead.id),
+                conversation_id=str(conversation.id),
+                message_id=str(message.id),
+                content=body,
+                channel=channel,
+                subject=subject,
+                campaign_id=str(campaign.id),
+            )
+        except Exception as exc:
+            logger.warning("FerretDB outbound mirror failed for lead {}: {}", lead.id, exc)
+        return message
+
     def _get_campaign(self, campaign_id: str) -> Campaign:
         campaign = self.campaign_repo.get_campaign(campaign_id)
         if not campaign:
             from fastapi import HTTPException, status
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Campaign not found")
+        if self.tenant_id and str(campaign.tenant_id) != str(self.tenant_id):
+            from fastapi import HTTPException
+            raise HTTPException(status_code=404, detail="Campaign not found")
         return campaign
 
     def create(self, payload: CampaignCreateRequest) -> CampaignResponse:
+        if self.tenant_id and str(payload.tenant_id) != str(self.tenant_id):
+            from fastapi import HTTPException
+            raise HTTPException(status_code=403, detail="Tenant does not match authenticated user")
         campaign = Campaign(
             id=uuid4(), tenant_id=payload.tenant_id,
             name=payload.name, description=payload.description,
@@ -156,8 +276,11 @@ class CampaignService:
     def list(self, tenant_id: str, status_filter: str | None = None,
              type_filter: str | None = None, page: int = 1,
              page_size: int = 20) -> Any:
+        if self.tenant_id and str(tenant_id) != str(self.tenant_id):
+            from fastapi import HTTPException
+            raise HTTPException(status_code=403, detail="Tenant does not match authenticated user")
         campaigns, total = self.campaign_repo.list_campaigns(
-            tenant_id, status_filter, type_filter, page, page_size)
+            self.tenant_id or tenant_id, status_filter, type_filter, page, page_size)
         items = [_campaign_to_response(c) for c in campaigns]
         from app.schemas.campaign import CampaignListResponse
         return CampaignListResponse(items=items, total=total, page=page, page_size=page_size)
@@ -209,6 +332,19 @@ class CampaignService:
             from fastapi import HTTPException
             raise HTTPException(status_code=400, detail=f"Cannot start campaign in {campaign.status.value} status")
 
+        existing_messages = self.message_repo.get_by_campaign(campaign_id)
+        existing_by_lead = {str(item.lead_id): item for item in existing_messages}
+        leads = self._select_leads(
+            campaign,
+            preselected_ids=set(existing_by_lead) or None,
+        )
+        if not leads:
+            from fastapi import HTTPException
+            raise HTTPException(
+                status_code=400,
+                detail="No eligible leads. Check audience filters, email addresses, suppression, and marketing consent.",
+            )
+
         locked = self.campaign_repo.set_processing(campaign_id)
         if not locked:
             from fastapi import HTTPException
@@ -220,7 +356,6 @@ class CampaignService:
 
         try:
             channel = self._channel_for_campaign(campaign.type)
-            leads = self.lead_repo.get_by_tenant(campaign.tenant_id)
             total = len(leads)
             sent = failed = 0
             results = []
@@ -235,34 +370,60 @@ class CampaignService:
                         if campaign.type in (CampaignType.EMAIL, CampaignType.MULTI_CHANNEL)
                         else str(lead.phone or "")
                     )
-                    cm = CampaignMessage(
-                        id=uuid4(), campaign_id=campaign.id, lead_id=lead.id,
-                        channel=campaign.type, recipient=recipient,
-                        subject=campaign.subject, body=campaign.body,
-                        image_url=campaign.image_url,
-                        status=DeliveryStatus.PENDING,
-                    )
-                    self.db.add(cm)
+                    personalized_subject = self._personalize(campaign.subject, lead)
+                    personalized_body = self._personalize(campaign.body, lead) or ""
+                    cm = existing_by_lead.get(str(lead.id))
+                    if cm is None:
+                        cm = CampaignMessage(
+                            id=uuid4(), campaign_id=campaign.id, lead_id=lead.id,
+                            channel=campaign.type, recipient=recipient,
+                            subject=personalized_subject, body=personalized_body,
+                            image_url=campaign.image_url,
+                            status=DeliveryStatus.PENDING,
+                        )
+                        self.db.add(cm)
+                    else:
+                        cm.recipient = recipient
+                        cm.subject = personalized_subject
+                        cm.body = personalized_body
+                        cm.image_url = campaign.image_url
+                        cm.status = DeliveryStatus.PENDING
                     batch_messages.append((lead, cm, recipient))
 
                 self.db.flush()
 
                 for lead, cm, recipient in batch_messages:
                     try:
+                        lead_channel = channel
                         if campaign.type == CampaignType.MULTI_CHANNEL:
-                            channel = lead.email and "email" or "whatsapp"
+                            lead_channel = lead.email and "email" or "whatsapp"
                             if lead.phone and not lead.email:
-                                channel = "whatsapp"
+                                lead_channel = "whatsapp"
 
+                        conversation_message = self._persist_outbound_message(
+                            campaign=campaign,
+                            lead=lead,
+                            subject=cm.subject,
+                            body=cm.body,
+                            channel=lead_channel,
+                        )
                         self.outbox_service.enqueue(
                             tenant_id=str(campaign.tenant_id),
-                            channel=channel,
+                            channel=lead_channel,
                             recipient=recipient,
-                            subject=campaign.subject,
-                            body=campaign.body,
+                            subject=cm.subject,
+                            body=cm.body,
+                            html_body=cm.body,
                             campaign_id=str(campaign.id),
                             campaign_message_id=str(cm.id),
-                            metadata={"lead_id": str(lead.id), "image_url": campaign.image_url or ""},
+                            conversation_message_id=str(conversation_message.id),
+                            metadata={
+                                "tenant_id": str(campaign.tenant_id),
+                                "lead_id": str(lead.id),
+                                "to_name": self._lead_name(lead),
+                                "image_url": campaign.image_url or "",
+                                "asset_ids": list((campaign.metadata_ or {}).get("asset_ids") or []),
+                            },
                             priority=1,
                         )
                         cm.status = DeliveryStatus.QUEUED
@@ -282,15 +443,11 @@ class CampaignService:
 
             self.campaign_repo.set_stats(
                 campaign.id,
-                sent_count=sent, failed_count=failed,
-                total_recipients=total, status=CampaignStatus.COMPLETED,
+                sent_count=0, failed_count=failed,
+                total_recipients=total, status=CampaignStatus.RUNNING,
             )
-            publish_event(EVENT_CAMPAIGN_COMPLETED, str(campaign.tenant_id), {
-                "campaign_id": campaign_id, "total": total, "sent": sent, "failed": failed,
-            })
-
-            return {"campaign_id": campaign_id, "status": "completed",
-                    "total": total, "sent": sent, "failed": failed, "results": results}
+            return {"campaign_id": campaign_id, "status": "queued",
+                    "total": total, "queued": sent, "failed": failed, "results": results}
 
         except Exception:
             self.db.rollback()
@@ -344,7 +501,7 @@ class CampaignService:
     def add_lead(self, campaign_id: str, lead_id: str) -> dict:
         campaign = self._get_campaign(campaign_id)
         lead = self.lead_repo.get_by_id(lead_id)
-        if not lead:
+        if not lead or lead.tenant_id != campaign.tenant_id:
             from fastapi import HTTPException
             raise HTTPException(status_code=404, detail="Lead not found")
         existing = self.message_repo.get_by_campaign(campaign_id)

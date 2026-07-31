@@ -87,7 +87,6 @@ class OutboxRepository(BaseRepository[OutboxMessage]):
         if row:
             row.status = "failed"
             row.last_error = error[:2000]
-            row.retry_count = (row.retry_count or 0) + 1
             self.db.commit()
 
     def schedule_retry(self, outbox_id: Any, scheduled_at: datetime,

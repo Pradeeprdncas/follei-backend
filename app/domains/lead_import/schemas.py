@@ -97,6 +97,7 @@ class LeadImportCommitResponse(BaseModel):
     total_conflicts: int = 0
     total_invalid: int = 0
     message: str
+    flow_enrollment: dict | None = None
 
 
 # ── Row Edit / Review Schemas ─────────────────────────────────────────────

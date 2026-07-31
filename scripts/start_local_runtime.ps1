@@ -9,7 +9,11 @@ $ErrorActionPreference = "Stop"
 $rootPath = [System.IO.Path]::GetFullPath($Root).TrimEnd("\")
 $pythonPath = [System.IO.Path]::GetFullPath($Python)
 $runtimeDir = Join-Path $rootPath "logs\runtime"
+$serviceRunner = Join-Path $rootPath "scripts\run_local_service.bat"
 New-Item -ItemType Directory -Path $runtimeDir -Force | Out-Null
+if (-not (Test-Path -LiteralPath $serviceRunner)) {
+    throw "Local service runner is missing: $serviceRunner"
+}
 
 # --- Detect Windows Terminal ---
 $wtPaths = @(
@@ -44,7 +48,9 @@ function Get-FolleiPids([string]$Marker) {
 $tabs = @(
     @{
         Name       = "Follei API"
-        Marker     = "uvicorn app.main:app"
+        # Arguments are quoted independently by the service runner, so match
+        # the stable application target instead of requiring adjacent tokens.
+        Marker     = "app.main:app"
         Arguments  = @("-m", "uvicorn", "app.main:app", "--host", "127.0.0.1", "--port", "$Port")
         LogStem    = "api"
         Color      = "#2E7D32"
@@ -76,6 +82,20 @@ $tabs = @(
         Arguments  = @("-m", "app.workers.lead_scoring_worker")
         LogStem    = "lead-scoring-worker"
         Color      = "#EF6C00"
+    },
+    @{
+        Name       = "Mail operations worker"
+        Marker     = "app.workers.mail_operations_worker"
+        Arguments  = @("-m", "app.workers.mail_operations_worker")
+        LogStem    = "mail-operations-worker"
+        Color      = "#00838F"
+    },
+    @{
+        Name       = "Flow execution worker"
+        Marker     = "app.workers.flow_execution_worker"
+        Arguments  = @("-m", "app.workers.flow_execution_worker")
+        LogStem    = "flow-execution-worker"
+        Color      = "#5D4037"
     }
 )
 
@@ -91,42 +111,52 @@ foreach ($tab in $tabs) {
 }
 
 # --- Build Windows Terminal command string ---
-# Build one single string that wt.exe receives. Semicolons separate tab commands.
+# Each tab invokes a small batch runner. Keeping title/error handling outside the
+# nested cmd command prevents quoted service names from being split and reported
+# as the misleading Windows exit code -1.
 $wtArgs = @()
 $firstTab = $true
 
+function Quote-CommandLineArgument([string]$Value) {
+    if ($Value -eq ';') {
+        return ';'
+    }
+    if ($Value -notmatch '[\s"&|<>^;]') {
+        return $Value
+    }
+    return '"' + ($Value -replace '"', '\"') + '"'
+}
+
 foreach ($tab in $tabs) {
     if ($alreadyRunning -contains $tab) { continue }
-
-    $argLine = ($tab.Arguments | ForEach-Object {
-        if ($_ -match '[\s&|<>^]') { '"' + ($_ -replace '"', '\"') + '"' } else { $_ }
-    }) -join " "
-
-    # The inner command for cmd /k. We use single quotes around the whole thing
-    # and escape inner double quotes as \" for the wt.exe parser.
-    $innerCmd = "title `"Follei - $($tab.Name)`" && cd /d `"$rootPath`" && `"$pythonPath`" -u $argLine & set FOLLEI_PROCESS_EXIT=!errorlevel! & title `"Follei - $($tab.Name) [EXITED !FOLLEI_PROCESS_EXIT!]`" & echo. & echo [EXITED] $($tab.Name) stopped with code !FOLLEI_PROCESS_EXIT!. Review the output above, then rerun start.bat."
 
     if (-not $firstTab) {
         $wtArgs += ";"
     }
     $firstTab = $false
 
-    $wtArgs += 'new-tab'
-    $wtArgs += '--title'
-    $wtArgs += "`"$($tab.Name)`""
-    $wtArgs += '--tabColor'
-    $wtArgs += $tab.Color
-    $wtArgs += '-d'
-    $wtArgs += "`"$rootPath`""
-    $wtArgs += 'cmd'
-    $wtArgs += '/d'
-    $wtArgs += '/v:on'
-    $wtArgs += '/k'
-    $wtArgs += "`"$innerCmd`""
+    $wtArgs += @(
+        'new-tab',
+        '--title',
+        $tab.Name,
+        '--tabColor',
+        $tab.Color,
+        '-d',
+        $rootPath,
+        'cmd.exe',
+        '/d',
+        '/k',
+        'call',
+        $serviceRunner,
+        $tab.Name,
+        $rootPath,
+        $pythonPath
+    )
+    $wtArgs += $tab.Arguments
 }
 
 # Join everything into ONE string with spaces
-$wtCommandLine = $wtArgs -join " "
+$wtCommandLine = ($wtArgs | ForEach-Object { Quote-CommandLineArgument "$_" }) -join " "
 
 # --- Launch Windows Terminal ---
 if ($wtArgs.Count -gt 0) {
@@ -202,6 +232,7 @@ foreach ($url in $requiredPages) {
 
 Write-Host "[OK] API health is green and both interfaces return HTTP 200."
 Write-Host "[OK] BANT/MEDDIC run in the API voice pipeline; analysis and lead-score persistence workers are active."
+Write-Host "[OK] Mail operations worker is active: Gmail inbound, scheduled campaigns, outbox, and retries."
 Write-Host "[OK] All output is visible in a single Windows Terminal window with color-coded tabs."
 
 if (-not $NoOpen) {

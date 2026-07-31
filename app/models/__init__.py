@@ -10,6 +10,7 @@ from app.models.conversations.conversation import Conversation, Message, Convers
 from app.models.conversations.interaction import Interaction
 from app.models.customers.customer import Customer
 from app.models.integrations.integration import IntegrationConnection
+from app.models.integrations.email_connection import EmailOAuthState, TenantEmailConnection
 from app.models.leads.lead import Lead
 from app.models.campaigns import Campaign
 from app.models.knowledge.knowledge_base import KnowledgeBase
@@ -24,5 +25,6 @@ from app.models.onboarding_profile import OnboardingProfile
 from app.models.onboarding_contact_channel import OnboardingContactChannel
 from app.models.onboarding_goal import OnboardingGoal
 from app.models.learning_signal import LearningSignal
+from app.models.flows import FlowDefinition, FlowVersion, FlowEnrollment, FlowExecutionStep, CommunicationAsset
 
-__all__ = ["Tenant", "User", "Agent", "Conversation", "Message", "ConversationCitation", "Interaction", "Customer", "IntegrationConnection", "Lead", "Campaign", "KnowledgeBase", "Document", "Chunk", "BusinessFactDraft", "Entity", "EntityRelation", "KnowledgeSyncEvent", "IndexingJob", "OnboardingProfile", "OnboardingContactChannel", "OnboardingGoal", "BusinessPlan", "CustomerSegment", "SLA", "LearningSignal"]
+__all__ = ["Tenant", "User", "Agent", "Conversation", "Message", "ConversationCitation", "Interaction", "Customer", "IntegrationConnection", "EmailOAuthState", "TenantEmailConnection", "Lead", "Campaign", "KnowledgeBase", "Document", "Chunk", "BusinessFactDraft", "Entity", "EntityRelation", "KnowledgeSyncEvent", "IndexingJob", "OnboardingProfile", "OnboardingContactChannel", "OnboardingGoal", "BusinessPlan", "CustomerSegment", "SLA", "LearningSignal", "FlowDefinition", "FlowVersion", "FlowEnrollment", "FlowExecutionStep", "CommunicationAsset"]

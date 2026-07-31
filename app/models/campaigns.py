@@ -1,7 +1,7 @@
 """Campaign Models - Email, WhatsApp, SMS, Multi-channel campaigns."""
 import uuid
 from datetime import datetime
-from sqlalchemy import Column, String, DateTime, ForeignKey, Integer, Boolean, Text, Enum as SQLEnum, Uuid
+from sqlalchemy import Column, String, DateTime, ForeignKey, Integer, Boolean, Text, Enum as SQLEnum, UniqueConstraint, Uuid
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import relationship
 import enum
@@ -164,16 +164,27 @@ class InboundEmail(Base):
     tenant_id = Column(Uuid(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False, index=True)
     campaign_id = Column(Uuid(as_uuid=True), ForeignKey("campaigns.id", ondelete="SET NULL"), nullable=True, index=True)
     lead_id = Column(Uuid(as_uuid=True), ForeignKey("leads.id", ondelete="SET NULL"), nullable=True, index=True)
+    conversation_id = Column(Uuid(as_uuid=True), ForeignKey("conversations.id", ondelete="SET NULL"), nullable=True, index=True)
     from_email = Column(String, nullable=True)
     to_email = Column(String, nullable=True)
     subject = Column(String, nullable=True)
     body = Column(Text, nullable=True)
     provider = Column(String, default="brevo")
+    provider_message_id = Column(String, nullable=True)
     event_type = Column(String, default="inbound")
+    status = Column(String, default="received", nullable=False)
     raw_payload = Column(JSONB, default=dict)
+    metadata_ = Column("metadata", JSONB, default=dict)
     received_at = Column(DateTime, default=datetime.utcnow)
 
     campaign = relationship("Campaign", back_populates="inbound_emails")
+
+    __table_args__ = (
+        UniqueConstraint(
+            "tenant_id", "provider", "provider_message_id",
+            name="uq_inbound_email_tenant_provider_message",
+        ),
+    )
 
 
 class OutboxMessage(Base):

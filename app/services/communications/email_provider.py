@@ -1,6 +1,7 @@
 """Email Provider - Brevo (formerly Sendinblue) integration."""
 from typing import Dict, Any, List, Optional
 from pathlib import Path
+import base64
 from loguru import logger
 import httpx
 from app.config.settings import get_settings
@@ -47,6 +48,9 @@ class EmailProvider:
         body: str,
         html_body: Optional[str] = None,
         reply_to: Optional[str] = None,
+        tenant_id: Optional[str] = None,
+        attachments: Optional[List[Dict[str, Any]]] = None,
+        message_headers: Optional[Dict[str, str]] = None,
     ) -> Dict[str, Any]:
         """Send a single email.
         
@@ -61,19 +65,46 @@ class EmailProvider:
         Returns:
             Response with message_id and status
         """
-        if not self.api_key:
+        from app.database.session import SessionLocal
+        from app.services.communications.email_connections import brevo_account, has_gmail_oauth_sender
+
+        with SessionLocal() as db:
+            use_gmail_oauth = has_gmail_oauth_sender(db, tenant_id)
+            account = brevo_account(db, tenant_id)
+        if use_gmail_oauth:
+            from app.services.communications.gmail_oauth import GmailOAuthService
+            try:
+                return await GmailOAuthService().send_for_tenant(
+                    tenant_id=str(tenant_id),
+                    to_email=to_email,
+                    subject=subject,
+                    body=body,
+                    html_body=html_body,
+                    attachments=attachments,
+                    in_reply_to=(message_headers or {}).get("In-Reply-To"),
+                    references=(message_headers or {}).get("References"),
+                    thread_id=(message_headers or {}).get("X-Gmail-Thread-Id"),
+                    require_campaign_enabled=True,
+                )
+            except Exception as exc:
+                logger.error(f"Tenant Gmail send failed for {to_email}: {exc}")
+                return {"success": False, "error": str(exc), "provider": "gmail"}
+        api_key = account.api_key if account else self.api_key
+        sender_email = account.sender_email if account else self.sender_email
+        sender_name = account.sender_name if account else self.sender_name
+        if not api_key:
             return {"success": False, "error": "Brevo API key not configured"}
         
         try:
             headers = {
-                "api-key": self.api_key,
+                "api-key": api_key,
                 "Content-Type": "application/json",
             }
             
             payload = {
                 "sender": {
-                    "email": self.sender_email,
-                    "name": self.sender_name,
+                    "email": sender_email,
+                    "name": sender_name,
                 },
                 "to": [
                     {
@@ -90,6 +121,16 @@ class EmailProvider:
             
             if reply_to:
                 payload["replyTo"] = {"email": reply_to}
+            if message_headers:
+                payload["headers"] = message_headers
+            if attachments:
+                payload["attachment"] = [
+                    {
+                        "name": str(item["name"]),
+                        "content": base64.b64encode(item["content_bytes"]).decode("ascii"),
+                    }
+                    for item in attachments
+                ]
             
             async with httpx.AsyncClient() as client:
                 response = await client.post(

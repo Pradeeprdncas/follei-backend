@@ -177,6 +177,7 @@ class ImportResult(BaseModel):
     skipped: int
     total: int
     errors: list[dict]
+    flow_enrollment: dict | None = None
 
 
 class PreviewRow(BaseModel):
@@ -264,7 +265,10 @@ async def import_leads(
             except Exception as e:
                 logger.warning("AI enrichment failed (non-fatal): %s", e)
 
-        return ImportResult(created=created, duplicates=duplicates, skipped=skipped, total=len(rows), errors=errors)
+        from app.services.flows.service import enroll_leads
+        created_ids = [item["lead_id"] for item in results if item.get("action") == "created"]
+        flow_enrollment = enroll_leads(db, tenant_uuid, created_ids, "lead_import") if created_ids else {"status": "not_enrolled", "enrolled": 0, "reason": "no_new_leads"}
+        return ImportResult(created=created, duplicates=duplicates, skipped=skipped, total=len(rows), errors=errors, flow_enrollment=flow_enrollment)
     except Exception:
         db.rollback()
         raise
@@ -593,6 +597,10 @@ def commit_import(
     _owned_job(service.repo.db, job_id, authenticated_tenant_id)
     try:
         result = service.commit(UUID(job_id))
+        from app.domains.lead_import.models import LeadImportRow
+        from app.services.flows.service import enroll_leads
+        lead_ids = [row[0] for row in service.repo.db.query(LeadImportRow.lead_id).filter(LeadImportRow.job_id == UUID(job_id), LeadImportRow.lead_id.isnot(None)).all()]
+        result["flow_enrollment"] = enroll_leads(service.repo.db, authenticated_tenant_id, lead_ids, "lead_import_job") if lead_ids else {"status": "not_enrolled", "enrolled": 0, "reason": "no_new_leads"}
         return LeadImportCommitResponse(**result)
     except JobNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))

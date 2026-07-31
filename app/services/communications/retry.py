@@ -34,6 +34,7 @@ class RetryEngine:
 
         if retry_count > max_retries:
             self.repo.mark_dead_letter(outbox_id, error)
+            self._mark_linked_dead_letter(msg, error)
             logger.warning(f"Outbox {outbox_id} moved to DLQ after {retry_count} retries")
             return False
 
@@ -42,6 +43,38 @@ class RetryEngine:
         self.repo.schedule_retry(outbox_id, scheduled_at=scheduled_at, error=error)
         logger.info(f"Outbox {outbox_id} retry #{retry_count} scheduled in {delay}s")
         return True
+
+    def _mark_linked_dead_letter(self, msg, error: str) -> None:
+        """Finalize campaign/conversation state when delivery retries are exhausted."""
+        from app.models.campaigns import Campaign, CampaignMessage, CampaignStatus, DeliveryStatus
+        from app.models.conversations.conversation import MessageDeliveryStatus
+
+        if msg.campaign_message_id:
+            campaign_message = self.repo.db.get(CampaignMessage, msg.campaign_message_id)
+            if campaign_message and campaign_message.status != DeliveryStatus.FAILED:
+                campaign_message.status = DeliveryStatus.FAILED
+                campaign_message.failed_at = datetime.utcnow()
+                campaign_message.error_message = error[:2000]
+                campaign = self.repo.db.get(Campaign, campaign_message.campaign_id)
+                if campaign:
+                    campaign.failed_count = (campaign.failed_count or 0) + 1
+                    remaining = self.repo.db.query(CampaignMessage).filter(
+                        CampaignMessage.campaign_id == campaign.id,
+                        CampaignMessage.status.in_((DeliveryStatus.PENDING, DeliveryStatus.QUEUED)),
+                    ).count()
+                    if remaining == 0:
+                        campaign.status = CampaignStatus.COMPLETED
+                        campaign.processing_started_at = None
+                        campaign.end_date = datetime.utcnow()
+        if msg.conversation_message_id:
+            self.repo.db.add(MessageDeliveryStatus(
+                tenant_id=msg.tenant_id,
+                message_id=msg.conversation_message_id,
+                status="failed",
+                provider=msg.provider,
+                metadata_={"error": error[:2000]},
+            ))
+        self.repo.db.commit()
 
     def get_due_retries(self, batch_size: int = 50) -> list[str]:
         """Get outbox messages due for retry."""

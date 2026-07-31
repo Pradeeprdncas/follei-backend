@@ -36,7 +36,7 @@ if not exist "%ROOT%.env" (
 )
 
 echo [1/7] Checking Python dependencies...
-"%PYTHON%" -c "import fastapi,uvicorn,kafka,qdrant_client,pymongo,boto3,playwright" >nul 2>&1
+"%PYTHON%" -c "import fastapi,uvicorn,kafka,qdrant_client,pymongo,boto3,playwright; from app.workers.mail_operations_worker import MailOperationsWorker; from app.workers.flow_execution_worker import run as run_flow_worker; from app.services.communications.gmail_auto_reply import GmailAutoReplyService" >nul 2>&1
 if errorlevel 1 (
   echo [INFO] One or more dependencies are missing. Installing requirements...
   "%PYTHON%" -m pip install -r "%ROOT%requirements.txt"
@@ -100,6 +100,9 @@ if errorlevel 1 (
 echo [OK] Database schema is current.
 
 echo [6/7] Starting API and all required workers...
+echo [INFO] The unified mail worker handles Gmail auto-replies, scheduled campaigns,
+echo        email outbox delivery, and retry processing. A second Gmail poller is
+echo        intentionally not started because it would process the same inbox twice.
 set "OPEN_ARG="
 if "%NO_OPEN%"=="1" set "OPEN_ARG=-NoOpen"
 powershell -NoProfile -ExecutionPolicy Bypass -File "%ROOT%scripts\start_local_runtime.ps1" -Root "%ROOT:~0,-1%" -Python "%PYTHON%" -Port %PORT% %OPEN_ARG%

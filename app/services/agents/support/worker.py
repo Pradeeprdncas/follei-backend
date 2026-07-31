@@ -90,6 +90,7 @@ async def handle_inbound_message(
         question=text, tenant_id=tenant_id, session_id=session_id,
         response_language=response_language,
         lead_id=lead_id,
+        channel=channel,
         on_token=on_token,
     )
     conversation_id = result.get("conversation_id")
