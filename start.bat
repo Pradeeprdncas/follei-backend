@@ -2,7 +2,8 @@
 setlocal EnableExtensions
 
 set "ROOT=%~dp0"
-set "PYTHON=%ROOT%follei_backend\indic_tts_venv\Scripts\python.exe"
+set "PYTHON="
+set "BOOTSTRAP_PYTHON="
 set "COMPOSE=%ROOT%docker-compose.yml"
 set "PORT=8000"
 set "NO_OPEN=0"
@@ -27,11 +28,14 @@ echo ==========================================================
 echo Root: %ROOT%
 echo.
 
-if not exist "%PYTHON%" (
-  echo [ERROR] Canonical Python runtime was not found:
-  echo         %PYTHON%
+call :find_python
+if not defined PYTHON (
+  echo [ERROR] Python 3.10 or newer was not found.
+  echo         Install Python from https://www.python.org/downloads/windows/
+  echo         and select "Add Python to PATH", then run start.bat again.
   goto :failed
 )
+echo [OK] Using Python: %PYTHON%
 
 if not exist "%ROOT%.env" (
   echo [ERROR] %ROOT%.env is missing. Follei cannot load its local settings.
@@ -161,6 +165,38 @@ echo   --no-open       Do not open the tenant and voice pages after startup.
 echo   --no-pause      Do not wait for a key press when the script finishes.
 echo   --skip-browser  Skip the Playwright Chromium check for a faster restart.
 endlocal
+exit /b 0
+
+:find_python
+rem Prefer project-local environments. They make startup portable and prevent
+rem package installations from modifying the user's global Python setup.
+if exist "%ROOT%follei_backend\indic_tts_venv\Scripts\python.exe" (
+  set "PYTHON=%ROOT%follei_backend\indic_tts_venv\Scripts\python.exe"
+  exit /b 0
+)
+if exist "%ROOT%.venv\Scripts\python.exe" (
+  set "PYTHON=%ROOT%.venv\Scripts\python.exe"
+  exit /b 0
+)
+if exist "%ROOT%venv\Scripts\python.exe" (
+  set "PYTHON=%ROOT%venv\Scripts\python.exe"
+  exit /b 0
+)
+
+rem Resolve a real interpreter path. `py -3` works even when `python` is not
+rem on PATH; the second command covers Python installations without py.exe.
+for /f "usebackq delims=" %%P in (`py -3 -c "import sys; print(sys.executable)" 2^>nul`) do if not defined BOOTSTRAP_PYTHON set "BOOTSTRAP_PYTHON=%%P"
+if not defined BOOTSTRAP_PYTHON for /f "usebackq delims=" %%P in (`python -c "import sys; print(sys.executable)" 2^>nul`) do if not defined BOOTSTRAP_PYTHON set "BOOTSTRAP_PYTHON=%%P"
+if not defined BOOTSTRAP_PYTHON exit /b 1
+
+echo [INFO] Creating local Python environment: %ROOT%.venv
+"%BOOTSTRAP_PYTHON%" -m venv "%ROOT%.venv"
+if errorlevel 1 (
+  echo [WARN] Could not create .venv. Falling back to the detected Python runtime.
+  set "PYTHON=%BOOTSTRAP_PYTHON%"
+  exit /b 0
+)
+set "PYTHON=%ROOT%.venv\Scripts\python.exe"
 exit /b 0
 
 :infrastructure_ready_now
