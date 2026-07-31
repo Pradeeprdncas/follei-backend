@@ -51,6 +51,9 @@ def _replace_compose_credentials(text: str) -> str:
     replacements = {
         ("minio", "MINIO_ROOT_USER"): "${OBJECT_STORAGE_ACCESS_KEY}",
         ("minio", "MINIO_ROOT_PASSWORD"): "${OBJECT_STORAGE_SECRET_KEY}",
+        ("postgres", "POSTGRES_USER"): "${POSTGRES_USER}",
+        ("postgres", "POSTGRES_PASSWORD"): "${POSTGRES_PASSWORD}",
+        ("postgres", "POSTGRES_DB"): "${POSTGRES_DB}",
         ("ferretdb-postgres", "POSTGRES_USER"): "${FERRETDB_USER}",
         ("ferretdb-postgres", "POSTGRES_PASSWORD"): "${FERRETDB_PASSWORD}",
         (

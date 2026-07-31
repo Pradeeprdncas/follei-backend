@@ -36,11 +36,12 @@ else
   echo "[WARN] Docker is unavailable; expecting infrastructure to be externally managed."
 fi
 
-echo "[3/6] Applying database schema..."
+echo "[3/6] Reconciling database schema..."
 (
   cd "${ROOT_DIR}"
+  "${PYTHON}" "${ROOT_DIR}/scripts/ensure_local_postgres_access.py"
+  "${PYTHON}" "${ROOT_DIR}/scripts/wait_for_kafka.py" --timeout 120
   "${PYTHON}" -m app.database.bootstrap
-  "${PYTHON}" -m alembic upgrade head
 )
 
 is_running() {

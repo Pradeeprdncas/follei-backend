@@ -58,7 +58,7 @@ if not exist "%ROOT%scripts\run_local_service.bat" (
 )
 
 echo [1/7] Checking Python dependencies...
-"%PYTHON%" -c "import fastapi,uvicorn,kafka,qdrant_client,pymongo,boto3,playwright; from app.workers.mail_operations_worker import MailOperationsWorker; from app.workers.flow_execution_worker import run as run_flow_worker; from app.services.communications.gmail_auto_reply import GmailAutoReplyService" >nul 2>&1
+"%PYTHON%" -c "import alembic,fastapi,psycopg2,uvicorn,kafka,qdrant_client,pymongo,boto3,playwright; from app.workers.mail_operations_worker import MailOperationsWorker; from app.workers.flow_execution_worker import run as run_flow_worker; from app.services.communications.gmail_auto_reply import GmailAutoReplyService" >nul 2>&1
 if errorlevel 1 (
   echo [INFO] One or more dependencies are missing. Installing requirements...
   "%PYTHON%" -m pip install -r "%ROOT%requirements.txt"
@@ -101,10 +101,18 @@ if errorlevel 1 (
 echo [4/7] Waiting for required stores and queues...
 call :require_port "PostgreSQL" 55589 60
 if errorlevel 1 goto :failed
+"%PYTHON%" "%ROOT%scripts\ensure_local_postgres_access.py"
+if errorlevel 1 (
+  echo [ERROR] PostgreSQL credentials could not be reconciled with DATABASE_URL.
+  goto :failed
+)
 call :require_port "Redis" 6379 60
 if errorlevel 1 goto :failed
-call :require_port "Kafka" 9092 90
-if errorlevel 1 goto :failed
+"%PYTHON%" "%ROOT%scripts\wait_for_kafka.py" --timeout 120
+if errorlevel 1 (
+  echo [ERROR] Kafka did not become ready for producer and consumer connections.
+  goto :failed
+)
 call :require_port "FerretDB" 27017 60
 if errorlevel 1 goto :failed
 call :require_port "Object storage" 9000 60
@@ -112,15 +120,10 @@ if errorlevel 1 goto :failed
 call :require_url "Qdrant" "http://127.0.0.1:6333/readyz" 60
 if errorlevel 1 goto :failed
 
-echo [5/7] Applying the local database schema...
+echo [5/7] Reconciling the local database schema...
 "%PYTHON%" -m app.database.bootstrap
 if errorlevel 1 (
-  echo [ERROR] Base database schema initialization failed.
-  goto :failed
-)
-"%PYTHON%" -m alembic upgrade head
-if errorlevel 1 (
-  echo [ERROR] Database migration failed.
+  echo [ERROR] Database schema initialization or migration failed.
   goto :failed
 )
 echo [OK] Database schema is current.
