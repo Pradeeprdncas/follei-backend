@@ -15,7 +15,9 @@ from sqlalchemy.orm import Session
 from app.config.database import get_db
 from app.core.security import get_authenticated_tenant_id, get_authenticated_user_id
 from app.models.onboarding_profile import OnboardingProfile
-from app.models.tenancy import User
+from app.models.tenancy import Tenant, User
+from app.models.integrations.email_connection import TenantEmailConnection
+from app.models.integrations.channel_connection import TenantChannelConnection
 from app.models.knowledge.fact_draft import BusinessFactDraft
 from app.repositories.onboarding_profile import OnboardingProfileRepository
 from app.repositories.onboarding_contact_channel import OnboardingContactChannelRepository
@@ -27,10 +29,10 @@ from app.services.knowledge.memory_store import seed_onboarding_context
 
 router = APIRouter(prefix="/api/v1/onboarding", tags=["onboarding"])
 
-_REQUIRED_FIELDS = ("company_name", "timezone")
+_REQUIRED_FIELDS = ("company_name", "timezone", "industry")
 
 INDUSTRY_CHOICES = (
-    "SaaS", "E-commerce", "Financial Services", "Healthcare", "Education",
+    "SaaS", "E-commerce", "Financial Services", "Insurance", "Healthcare", "Education",
     "Logistics & Transportation", "Manufacturing", "IT Services & Consulting",
     "Telecommunications", "Real Estate", "Media & Entertainment", "Other",
 )
@@ -117,6 +119,8 @@ class OnboardingProfileUpdate(BaseModel):
 
     @model_validator(mode="after")
     def _industry_other_requires_other(self):
+        if "industry" in self.model_fields_set and self.industry is None:
+            raise ValueError("industry cannot be null")
         if self.industry_other and self.industry not in (None, "Other"):
             raise ValueError("industry_other is only valid when industry is 'Other'")
         return self
@@ -152,12 +156,45 @@ def _response(profile: OnboardingProfile, contact_channels: list[str], goals: li
     )
 
 
+def _activate_industry_pack(db: Session, tenant_id: uuid.UUID, industry: str) -> None:
+    from app.services.flows.service import ensure_tenant_workflow_runtime
+
+    instances = ensure_tenant_workflow_runtime(db, tenant_id, industry)
+    if not instances:
+        raise HTTPException(status_code=500, detail="Industry workflow pack could not be created")
+    tenant = db.get(Tenant, tenant_id)
+    if not tenant:
+        raise HTTPException(status_code=404, detail="Tenant not found")
+    tenant.industry = industry
+    tenant.industry_pack_activated = True
+    db.commit()
+
+
+def _verified_channel_state(db: Session, tenant_id: str) -> tuple[bool, bool]:
+    tenant_uuid = uuid.UUID(tenant_id)
+    verified_email = db.query(TenantEmailConnection.id).filter(
+        TenantEmailConnection.tenant_id == tenant_uuid,
+        TenantEmailConnection.enabled.is_(True),
+        TenantEmailConnection.verified.is_(True),
+        TenantEmailConnection.status == "active",
+    ).first() is not None
+    verified_non_email = db.query(TenantChannelConnection.id).filter(
+        TenantChannelConnection.tenant_id == tenant_uuid,
+        TenantChannelConnection.enabled.is_(True),
+        TenantChannelConnection.verified.is_(True),
+        TenantChannelConnection.status == "active",
+    ).first() is not None
+    return verified_email, verified_non_email
+
+
 @router.post("/profile", response_model=OnboardingProfileResponse, status_code=status.HTTP_201_CREATED)
 def create_onboarding_profile(
     payload: OnboardingProfileCreate,
     db: Session = Depends(get_db),
     tenant_id: str = Depends(get_authenticated_tenant_id),
 ):
+    if not payload.industry:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="industry is required")
     repo = OnboardingProfileRepository(db)
     if repo.get_by_tenant(tenant_id):
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Onboarding profile already exists for this tenant; use PATCH to update it")
@@ -175,9 +212,7 @@ def create_onboarding_profile(
     profile = repo.create(profile)
     channels = OnboardingContactChannelRepository(db).replace_for_tenant(profile.tenant_id, payload.contact_channels or [])
     goals = OnboardingGoalRepository(db).replace_for_tenant(profile.tenant_id, payload.goals or [])
-    if payload.industry in {"Financial Services", "Insurance"}:
-        from app.services.flows.service import ensure_tenant_workflow_runtime
-        ensure_tenant_workflow_runtime(db, profile.tenant_id, "insurance")
+    _activate_industry_pack(db, profile.tenant_id, payload.industry)
     return _response(profile, channels, goals)
 
 
@@ -193,13 +228,16 @@ def update_onboarding_profile(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No onboarding profile exists yet for this tenant; POST one first")
     channel_repo = OnboardingContactChannelRepository(db)
     goal_repo = OnboardingGoalRepository(db)
-    fields = payload.model_dump(exclude={"contact_channels", "goals"})
+    fields = payload.model_dump(exclude={"contact_channels", "goals"}, exclude_unset=True)
     profile = repo.update(profile, **fields)
     channels = channel_repo.replace_for_tenant(profile.tenant_id, payload.contact_channels) if payload.contact_channels is not None else channel_repo.get_for_tenant(profile.tenant_id)
     goals = goal_repo.replace_for_tenant(profile.tenant_id, payload.goals) if payload.goals is not None else goal_repo.get_for_tenant(profile.tenant_id)
-    if profile.industry in {"Financial Services", "Insurance"}:
-        from app.services.flows.service import ensure_tenant_workflow_runtime
-        ensure_tenant_workflow_runtime(db, profile.tenant_id, "insurance")
+    if payload.industry is not None:
+        tenant = db.get(Tenant, profile.tenant_id)
+        if tenant:
+            tenant.industry_pack_activated = False
+            db.commit()
+        _activate_industry_pack(db, profile.tenant_id, profile.industry)
     return _response(profile, channels, goals)
 
 
@@ -267,10 +305,25 @@ def onboarding_status(
     repo = OnboardingProfileRepository(db)
     profile = repo.get_by_tenant(tenant_id)
     documents = list_document_statuses(db, tenant_id)
+    tenant = db.get(Tenant, uuid.UUID(tenant_id))
+    industry_pack_activated = bool(tenant and tenant.industry_pack_activated)
+    verified_email, verified_non_email = _verified_channel_state(db, tenant_id)
+    communication_ready = verified_email or verified_non_email
     if not profile:
-        return {"tenant_id": tenant_id, "profile_exists": False, "complete": False, "missing_fields": list(_REQUIRED_FIELDS), "documents": documents}
+        return {
+            "tenant_id": tenant_id, "profile_exists": False, "complete": False,
+            "missing_fields": list(_REQUIRED_FIELDS), "industry_pack_activated": industry_pack_activated,
+            "verified_email": verified_email, "verified_non_email_channel": verified_non_email,
+            "communication_ready": communication_ready, "documents": documents,
+        }
     missing = [field for field in _REQUIRED_FIELDS if not getattr(profile, field)]
-    return {"tenant_id": tenant_id, "profile_exists": True, "complete": not missing, "missing_fields": missing, "documents": documents}
+    return {
+        "tenant_id": tenant_id, "profile_exists": True,
+        "complete": not missing and industry_pack_activated and communication_ready,
+        "missing_fields": missing, "industry_pack_activated": industry_pack_activated,
+        "verified_email": verified_email, "verified_non_email_channel": verified_non_email,
+        "communication_ready": communication_ready, "documents": documents,
+    }
 
 
 @router.get("/extractions")
@@ -336,6 +389,12 @@ def complete_onboarding(
     missing = [field for field in _REQUIRED_FIELDS if not getattr(profile, field)]
     if missing:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=f"Cannot complete onboarding, missing required fields: {missing}")
+    tenant = db.get(Tenant, uuid.UUID(tenant_id))
+    if not tenant or not tenant.industry_pack_activated:
+        raise HTTPException(status_code=422, detail="Cannot complete onboarding until the selected industry workflow pack is activated")
+    verified_email, verified_non_email = _verified_channel_state(db, tenant_id)
+    if not (verified_email or verified_non_email):
+        raise HTTPException(status_code=422, detail="Cannot complete onboarding until at least one email, SMS, WhatsApp, or voice connection is provider-verified and active")
 
     already_completed = profile.completed_at is not None
     if not already_completed:

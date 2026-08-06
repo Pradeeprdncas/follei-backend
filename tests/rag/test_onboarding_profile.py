@@ -61,7 +61,7 @@ def test_create_profile_rejects_invalid_company_size(tenant_and_token):
     _, token = tenant_and_token
     resp = client.post(
         "/api/v1/onboarding/profile",
-        json={"company_name": "Acme", "timezone": "Asia/Kolkata", "company_size": "huge"},
+        json={"company_name": "Acme", "timezone": "Asia/Kolkata", "industry": "SaaS", "company_size": "huge"},
         headers=_auth(token),
     )
     assert resp.status_code == 422
@@ -88,7 +88,29 @@ def test_industry_other_requires_industry_other_value_and_industry_other_field(t
 
 def test_patch_can_update_industry(tenant_and_token):
     _, token = tenant_and_token
-    client.post("/api/v1/onboarding/profile", json={"company_name": "Acme", "timezone": "Asia/Kolkata"}, headers=_auth(token))
+    client.post("/api/v1/onboarding/profile", json={"company_name": "Acme", "timezone": "Asia/Kolkata", "industry": "SaaS"}, headers=_auth(token))
     resp = client.patch("/api/v1/onboarding/profile", json={"industry": "Healthcare"}, headers=_auth(token))
     assert resp.status_code == 200
     assert resp.json()["industry"] == "Healthcare"
+
+
+def test_create_profile_requires_industry(tenant_and_token):
+    _, token = tenant_and_token
+    resp = client.post(
+        "/api/v1/onboarding/profile",
+        json={"company_name": "Acme", "timezone": "Asia/Kolkata"},
+        headers=_auth(token),
+    )
+    assert resp.status_code == 400
+
+
+def test_patch_cannot_clear_required_industry(tenant_and_token):
+    _, token = tenant_and_token
+    created = client.post(
+        "/api/v1/onboarding/profile",
+        json={"company_name": "Acme", "timezone": "Asia/Kolkata", "industry": "SaaS"},
+        headers=_auth(token),
+    )
+    assert created.status_code == 201
+    response = client.patch("/api/v1/onboarding/profile", json={"industry": None}, headers=_auth(token))
+    assert response.status_code == 422

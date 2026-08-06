@@ -12,7 +12,7 @@ from pathlib import Path
 
 from alembic import command
 from alembic.config import Config
-from sqlalchemy import inspect
+from sqlalchemy import Column, MetaData, String, Table, inspect
 
 from app.database.base import Base
 from app.config.database import engine
@@ -25,6 +25,17 @@ ALEMBIC_VERSION_TABLE = "alembic_version"
 def _alembic_config() -> Config:
     root = Path(__file__).resolve().parents[2]
     return Config(str(root / "alembic.ini"))
+
+
+def _create_wide_version_table() -> None:
+    """Create Alembic's marker with room for descriptive revision IDs."""
+    metadata = MetaData()
+    Table(
+        ALEMBIC_VERSION_TABLE,
+        metadata,
+        Column("version_num", String(128), primary_key=True, nullable=False),
+    )
+    metadata.create_all(bind=engine)
 
 
 def ensure_base_schema() -> tuple[str, int]:
@@ -49,6 +60,7 @@ def ensure_base_schema() -> tuple[str, int]:
         )
 
     Base.metadata.create_all(bind=engine)
+    _create_wide_version_table()
     command.stamp(_alembic_config(), "head")
     return "initialized", len(canonical_tables)
 

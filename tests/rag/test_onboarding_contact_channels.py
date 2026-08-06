@@ -39,7 +39,7 @@ def test_create_with_multiple_channels(tenant_and_token):
     _, token = tenant_and_token
     resp = client.post(
         "/api/v1/onboarding/profile",
-        json={"company_name": "Acme", "timezone": "Asia/Kolkata", "contact_channels": ["Email", "WhatsApp"]},
+        json={"company_name": "Acme", "timezone": "Asia/Kolkata", "industry": "SaaS", "contact_channels": ["Email", "WhatsApp"]},
         headers=_auth(token),
     )
     assert resp.status_code == 201
@@ -50,7 +50,7 @@ def test_invalid_channel_rejected(tenant_and_token):
     _, token = tenant_and_token
     resp = client.post(
         "/api/v1/onboarding/profile",
-        json={"company_name": "Acme", "timezone": "Asia/Kolkata", "contact_channels": ["Email", "Carrier Pigeon"]},
+        json={"company_name": "Acme", "timezone": "Asia/Kolkata", "industry": "SaaS", "contact_channels": ["Email", "Carrier Pigeon"]},
         headers=_auth(token),
     )
     assert resp.status_code == 422
@@ -60,7 +60,7 @@ def test_patch_replaces_channel_set(tenant_and_token):
     _, token = tenant_and_token
     client.post(
         "/api/v1/onboarding/profile",
-        json={"company_name": "Acme", "timezone": "Asia/Kolkata", "contact_channels": ["Email", "Phone"]},
+        json={"company_name": "Acme", "timezone": "Asia/Kolkata", "industry": "SaaS", "contact_channels": ["Email", "Phone"]},
         headers=_auth(token),
     )
     resp = client.patch("/api/v1/onboarding/profile", json={"contact_channels": ["SMS"]}, headers=_auth(token))
@@ -72,7 +72,7 @@ def test_patch_without_contact_channels_leaves_existing_selection_untouched(tena
     _, token = tenant_and_token
     client.post(
         "/api/v1/onboarding/profile",
-        json={"company_name": "Acme", "timezone": "Asia/Kolkata", "contact_channels": ["Email", "Phone"]},
+        json={"company_name": "Acme", "timezone": "Asia/Kolkata", "industry": "SaaS", "contact_channels": ["Email", "Phone"]},
         headers=_auth(token),
     )
     resp = client.patch("/api/v1/onboarding/profile", json={"website": "https://acme.example"}, headers=_auth(token))
@@ -84,7 +84,7 @@ def test_duplicate_channels_are_deduplicated(tenant_and_token):
     _, token = tenant_and_token
     resp = client.post(
         "/api/v1/onboarding/profile",
-        json={"company_name": "Acme", "timezone": "Asia/Kolkata", "contact_channels": ["Email", "Email", "SMS"]},
+        json={"company_name": "Acme", "timezone": "Asia/Kolkata", "industry": "SaaS", "contact_channels": ["Email", "Email", "SMS"]},
         headers=_auth(token),
     )
     assert resp.status_code == 201

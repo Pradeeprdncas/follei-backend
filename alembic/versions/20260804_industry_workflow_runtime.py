@@ -14,6 +14,16 @@ depends_on = None
 
 
 def upgrade() -> None:
+    # Alembic creates this column as VARCHAR(32), but this revision ID is 34
+    # characters. Widen it inside the same transaction before Alembic records
+    # the new revision, otherwise upgrades from 20260731 fail after the DDL.
+    op.alter_column(
+        "alembic_version",
+        "version_num",
+        existing_type=sa.String(length=32),
+        type_=sa.String(length=128),
+        existing_nullable=False,
+    )
     op.create_table(
         "workflow_templates",
         sa.Column("id", sa.Uuid(), primary_key=True),

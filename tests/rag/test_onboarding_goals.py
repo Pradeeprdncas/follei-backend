@@ -39,7 +39,7 @@ def test_create_with_three_goals_succeeds(tenant_and_token):
     _, token = tenant_and_token
     resp = client.post(
         "/api/v1/onboarding/profile",
-        json={"company_name": "Acme", "timezone": "Asia/Kolkata", "goals": ["Increase Revenue", "Reduce Customer Churn", "Improve Conversion Rate"]},
+        json={"company_name": "Acme", "timezone": "Asia/Kolkata", "industry": "SaaS", "goals": ["Increase Revenue", "Reduce Customer Churn", "Improve Conversion Rate"]},
         headers=_auth(token),
     )
     assert resp.status_code == 201
@@ -51,7 +51,7 @@ def test_create_with_four_goals_is_rejected_with_422(tenant_and_token):
     resp = client.post(
         "/api/v1/onboarding/profile",
         json={
-            "company_name": "Acme", "timezone": "Asia/Kolkata",
+            "company_name": "Acme", "timezone": "Asia/Kolkata", "industry": "SaaS",
             "goals": ["Increase Revenue", "Reduce Customer Churn", "Improve Conversion Rate", "Track Customer Health"],
         },
         headers=_auth(token),
@@ -64,7 +64,7 @@ def test_invalid_goal_value_rejected(tenant_and_token):
     _, token = tenant_and_token
     resp = client.post(
         "/api/v1/onboarding/profile",
-        json={"company_name": "Acme", "timezone": "Asia/Kolkata", "goals": ["Conquer The World"]},
+        json={"company_name": "Acme", "timezone": "Asia/Kolkata", "industry": "SaaS", "goals": ["Conquer The World"]},
         headers=_auth(token),
     )
     assert resp.status_code == 422
@@ -74,7 +74,7 @@ def test_patch_adding_a_fourth_goal_is_rejected(tenant_and_token):
     _, token = tenant_and_token
     client.post(
         "/api/v1/onboarding/profile",
-        json={"company_name": "Acme", "timezone": "Asia/Kolkata", "goals": ["Increase Revenue", "Reduce Customer Churn"]},
+        json={"company_name": "Acme", "timezone": "Asia/Kolkata", "industry": "SaaS", "goals": ["Increase Revenue", "Reduce Customer Churn"]},
         headers=_auth(token),
     )
     resp = client.patch(
@@ -89,7 +89,7 @@ def test_duplicate_goals_do_not_count_twice_against_the_limit(tenant_and_token):
     _, token = tenant_and_token
     resp = client.post(
         "/api/v1/onboarding/profile",
-        json={"company_name": "Acme", "timezone": "Asia/Kolkata", "goals": ["Increase Revenue", "Increase Revenue", "Reduce Customer Churn"]},
+        json={"company_name": "Acme", "timezone": "Asia/Kolkata", "industry": "SaaS", "goals": ["Increase Revenue", "Increase Revenue", "Reduce Customer Churn"]},
         headers=_auth(token),
     )
     assert resp.status_code == 201

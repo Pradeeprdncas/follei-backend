@@ -34,6 +34,7 @@ class Tenant(Base):
     slug = Column(String, index=True, nullable=True)
     is_active = Column(Boolean, default=True, nullable=False)
     industry = Column(String, nullable=True)
+    industry_pack_activated = Column(Boolean, default=False, nullable=False)
     country_region = Column(String, nullable=True)
     website = Column(String, nullable=True)
     selected_channels = Column(JSONB, nullable=True)

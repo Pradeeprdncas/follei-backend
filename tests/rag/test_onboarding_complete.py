@@ -11,6 +11,7 @@ from app.core.security import create_access_token
 from app.models.tenant import Tenant
 from app.models.document import Document
 from app.models.knowledge.fact_draft import BusinessFactDraft
+from app.models.integrations.email_connection import TenantEmailConnection
 from app.services.knowledge import memory_store
 from app.main import app
 
@@ -41,6 +42,12 @@ def tenant_and_token():
     tenant_id = uuid.uuid4()
     tenant = Tenant(id=tenant_id, name="Complete Test Co", slug=f"complete-{tenant_id.hex[:8]}")
     db.add(tenant)
+    db.flush()
+    db.add(TenantEmailConnection(
+        tenant_id=tenant_id, provider="gmail", email_address=f"verified-{tenant_id.hex[:8]}@example.com",
+        sender_name="Complete Test", auth_type="oauth", encrypted_refresh_token="test-only",
+        enabled=True, verified=True, status="active",
+    ))
     db.commit()
     db.close()
     token = create_access_token(user_id=uuid.uuid4(), tenant_id=tenant_id)
@@ -64,6 +71,29 @@ def test_complete_without_profile_is_404(tenant_and_token, ferretdb_collection):
     _, token = tenant_and_token
     resp = client.post("/api/v1/onboarding/complete", headers=_auth(token))
     assert resp.status_code == 404
+
+
+def test_complete_requires_a_provider_verified_channel(tenant_and_token, ferretdb_collection):
+    tenant_id, token = tenant_and_token
+    client.post(
+        "/api/v1/onboarding/profile",
+        json={"company_name": "Acme", "timezone": "Asia/Kolkata", "industry": "SaaS"},
+        headers=_auth(token),
+    )
+    db = SessionLocal()
+    db.query(TenantEmailConnection).filter_by(tenant_id=uuid.UUID(tenant_id)).update({"verified": False})
+    db.commit()
+    db.close()
+
+    status_response = client.get("/api/v1/onboarding/status", headers=_auth(token))
+    assert status_response.status_code == 200
+    assert status_response.json()["industry_pack_activated"] is True
+    assert status_response.json()["communication_ready"] is False
+    assert status_response.json()["complete"] is False
+
+    response = client.post("/api/v1/onboarding/complete", headers=_auth(token))
+    assert response.status_code == 422
+    assert "provider-verified" in response.text
 
 
 def test_complete_succeeds_with_unreviewed_extractions_pending(tenant_and_token, ferretdb_collection):
@@ -110,7 +140,7 @@ def test_complete_seeds_ferretdb_tenant_context(tenant_and_token, ferretdb_colle
 
 def test_complete_is_idempotent(tenant_and_token, ferretdb_collection):
     _, token = tenant_and_token
-    client.post("/api/v1/onboarding/profile", json={"company_name": "Acme", "timezone": "Asia/Kolkata"}, headers=_auth(token))
+    client.post("/api/v1/onboarding/profile", json={"company_name": "Acme", "timezone": "Asia/Kolkata", "industry": "SaaS"}, headers=_auth(token))
     first = client.post("/api/v1/onboarding/complete", headers=_auth(token))
     second = client.post("/api/v1/onboarding/complete", headers=_auth(token))
     assert first.json()["already_completed"] is False

@@ -62,7 +62,8 @@ def gmail_mailboxes(db: Session) -> list[GmailMailbox]:
         .filter(
             TenantEmailConnection.provider == "gmail",
             TenantEmailConnection.enabled.is_(True),
-            TenantEmailConnection.status.in_(("configured", "active")),
+            TenantEmailConnection.verified.is_(True),
+            TenantEmailConnection.status == "active",
         )
         .order_by(TenantEmailConnection.created_at.asc())
         .all()
@@ -120,8 +121,9 @@ def brevo_account(db: Session, tenant_id: str | UUID | None) -> BrevoAccount | N
                 TenantEmailConnection.tenant_id == UUID(str(tenant_id)),
                 TenantEmailConnection.provider == "brevo",
                 TenantEmailConnection.enabled.is_(True),
+                TenantEmailConnection.verified.is_(True),
                 TenantEmailConnection.campaign_enabled.is_(True),
-                TenantEmailConnection.status.in_(("configured", "active")),
+                TenantEmailConnection.status == "active",
             )
             .order_by(TenantEmailConnection.updated_at.desc())
             .first()

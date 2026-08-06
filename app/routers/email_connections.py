@@ -1,6 +1,8 @@
 """Tenant-scoped email connection management."""
 from __future__ import annotations
 
+import asyncio
+from datetime import datetime
 from urllib.parse import urlencode
 from uuid import UUID
 
@@ -21,6 +23,11 @@ from app.schemas.email_connection import (
     GmailOAuthStartResponse,
 )
 from app.services.communications.email_connections import encrypt_secret
+from app.services.communications.connection_verification import (
+    ProviderVerificationError,
+    verify_brevo_email,
+    verify_gmail_app_password,
+)
 from app.services.communications.gmail_oauth import GmailOAuthError, GmailOAuthService
 
 router = APIRouter(prefix="/api/email-connections", tags=["email-connections"])
@@ -203,6 +210,9 @@ def update_email_connection(
         row.encrypted_api_key = encrypt_secret(api_key)
     if app_password:
         row.encrypted_app_password = encrypt_secret(app_password)
+    if api_key or app_password or requested_email is not None:
+        row.verified = False
+        row.status = "configured"
 
     if requested_enabled is not None:
         if requested_enabled and row.auth_type == "oauth" and not row.encrypted_refresh_token:
@@ -229,6 +239,44 @@ def update_email_connection(
             status_code=409,
             detail="That email address is already connected to this or another tenant.",
         ) from exc
+    db.refresh(row)
+    return _response(row)
+
+
+@router.post("/{connection_id}/verify", response_model=EmailConnectionResponse)
+async def verify_email_connection(
+    connection_id: UUID,
+    tenant_id: str = Depends(get_authenticated_tenant_id),
+    db: Session = Depends(get_db),
+):
+    """Verify credentials and sender ownership with the provider before use."""
+    row = _owned(db, tenant_id, connection_id)
+    if row.provider == "gmail" and row.auth_type == "oauth":
+        if not row.encrypted_refresh_token:
+            raise HTTPException(status_code=422, detail="Complete Google OAuth before verification")
+        # OAuth callback already confirms /users/me/profile and binds its email.
+        row.verified = True
+        row.status = "active"
+        row.last_error = None
+    else:
+        try:
+            if row.provider == "gmail":
+                await asyncio.to_thread(verify_gmail_app_password, row)
+            elif row.provider == "brevo":
+                await verify_brevo_email(row)
+            else:
+                raise ProviderVerificationError(f"Unsupported email provider {row.provider}")
+        except ProviderVerificationError as exc:
+            row.verified = False
+            row.status = "verification_failed"
+            row.last_error = str(exc)[:2000]
+            db.commit()
+            raise HTTPException(status_code=422, detail=row.last_error) from exc
+        row.verified = True
+        row.status = "active"
+        row.last_error = None
+    row.updated_at = datetime.utcnow()
+    db.commit()
     db.refresh(row)
     return _response(row)
 
