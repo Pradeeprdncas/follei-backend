@@ -29,6 +29,9 @@ def create_app() -> FastAPI:
         version="1.0.0",
         docs_url=None,
     )
+    # swagger-ui-bundle 1.1.0 embeds Swagger UI 4.x, which accepts OpenAPI
+    # 3.0.x but rejects FastAPI's newer 3.1.0 default as an invalid definition.
+    app.openapi_version = "3.0.3"
     app.mount("/api-docs-assets", StaticFiles(directory=str(swagger_ui_path)), name="api-docs-assets")
 
     @app.get("/docs", include_in_schema=False)
