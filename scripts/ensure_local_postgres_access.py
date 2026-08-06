@@ -45,11 +45,12 @@ def _is_superuser(database_url: str) -> bool:
         connection = psycopg2.connect(database_url, connect_timeout=3)
         with connection.cursor() as cursor:
             cursor.execute(
-                "SELECT rolsuper FROM pg_roles WHERE rolname = current_user"
+                """SELECT rolsuper, rolcreaterole, rolcreatedb, rolreplication, rolbypassrls
+                   FROM pg_roles WHERE rolname = current_user"""
             )
             result = cursor.fetchone()
         connection.close()
-        return bool(result and result[0])
+        return bool(result and all(result))
     except psycopg2.OperationalError:
         return False
 
@@ -165,20 +166,22 @@ def ensure_access() -> str:
     database = _sql_identifier(app_database)
     user_literal = _sql_literal(app_user)
     password_literal = _sql_literal(app_password)
-    sql = f"""
+    role_sql = f"""
 DO $follei$
 BEGIN
   IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = {user_literal}) THEN
     EXECUTE 'ALTER ROLE ' || quote_ident({user_literal}) ||
-            ' WITH LOGIN SUPERUSER PASSWORD ' || quote_literal({password_literal});
+            ' WITH LOGIN SUPERUSER CREATEDB CREATEROLE REPLICATION BYPASSRLS PASSWORD ' ||
+            quote_literal({password_literal});
   ELSE
     EXECUTE 'CREATE ROLE ' || quote_ident({user_literal}) ||
-            ' WITH LOGIN SUPERUSER PASSWORD ' || quote_literal({password_literal});
+            ' WITH LOGIN SUPERUSER CREATEDB CREATEROLE REPLICATION BYPASSRLS PASSWORD ' ||
+            quote_literal({password_literal});
   END IF;
 END
 $follei$;
+ALTER DATABASE {database} OWNER TO {role};
 GRANT ALL PRIVILEGES ON DATABASE {database} TO {role};
-GRANT ALL PRIVILEGES ON SCHEMA public TO {role};
 """
     repair_result = _docker(
         "exec",
@@ -191,12 +194,43 @@ GRANT ALL PRIVILEGES ON SCHEMA public TO {role};
         admin_user,
         "-d",
         admin_database,
-        input_text=sql,
+        input_text=role_sql,
     )
     if repair_result.returncode:
         raise RuntimeError(
             "could not reconcile the local PostgreSQL role: "
             + repair_result.stderr.strip()
+        )
+    privilege_sql = f"""
+ALTER SCHEMA public OWNER TO {role};
+GRANT ALL PRIVILEGES ON SCHEMA public TO {role};
+GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO {role};
+GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO {role};
+GRANT ALL PRIVILEGES ON ALL FUNCTIONS IN SCHEMA public TO {role};
+ALTER DEFAULT PRIVILEGES FOR ROLE {role} IN SCHEMA public
+  GRANT ALL PRIVILEGES ON TABLES TO {role};
+ALTER DEFAULT PRIVILEGES FOR ROLE {role} IN SCHEMA public
+  GRANT ALL PRIVILEGES ON SEQUENCES TO {role};
+ALTER DEFAULT PRIVILEGES FOR ROLE {role} IN SCHEMA public
+  GRANT ALL PRIVILEGES ON FUNCTIONS TO {role};
+"""
+    privilege_result = _docker(
+        "exec",
+        "-i",
+        container,
+        "psql",
+        "-v",
+        "ON_ERROR_STOP=1",
+        "-U",
+        admin_user,
+        "-d",
+        app_database,
+        input_text=privilege_sql,
+    )
+    if privilege_result.returncode:
+        raise RuntimeError(
+            "PostgreSQL role was updated but database object privileges could not be reconciled: "
+            + privilege_result.stderr.strip()
         )
     if not _can_connect(database_url):
         raise RuntimeError(

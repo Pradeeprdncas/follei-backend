@@ -17,6 +17,7 @@ from sqlalchemy import Column, MetaData, String, Table, inspect
 from app.database.base import Base
 from app.config.database import engine
 import app.models  # noqa: F401 - registers canonical mappings on Base.metadata
+from app.database.migration_preflight import validate_migration_sources
 
 
 ALEMBIC_VERSION_TABLE = "alembic_version"
@@ -45,6 +46,9 @@ def ensure_base_schema() -> tuple[str, int]:
     are deliberately rejected.  Stamping such a database automatically could
     hide an incomplete or incompatible schema and risks data loss.
     """
+    repaired = validate_migration_sources()
+    if repaired:
+        print(f"migration_sources_repaired={','.join(repaired)}")
     tables = set(inspect(engine).get_table_names())
     canonical_tables = set(Base.metadata.tables)
 
