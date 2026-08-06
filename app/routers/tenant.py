@@ -30,6 +30,8 @@ def create_tenant(payload: TenantCreate, db: Session = Depends(get_db)):
     db.add(tenant)
     db.commit()
     db.refresh(tenant)
+    from app.services.flows.service import ensure_tenant_workflow_runtime
+    ensure_tenant_workflow_runtime(db, tenant.id, tenant.industry)
 
     return tenant
 

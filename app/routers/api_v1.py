@@ -427,8 +427,9 @@ def register(payload: RegisterRequest, db: Session = Depends(get_db)) -> Registe
     # Every tenant starts with an editable, inactive pre-sales template. Leads
     # can be imported immediately, but no communication is sent until the
     # tenant validates and activates this flow.
-    from app.services.flows.service import ensure_default_flow
+    from app.services.flows.service import ensure_default_flow, ensure_tenant_workflow_runtime
     ensure_default_flow(db, tenant_id)
+    ensure_tenant_workflow_runtime(db, tenant_id)
     db.commit()
     tokens = _token_pair(user_id, tenant_id)
     return RegisterResponse(

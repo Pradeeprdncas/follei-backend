@@ -44,7 +44,12 @@ class OrganizationService:
             auto_reply_enabled=auto_reply_enabled,
             channel_config=channel_config,
         )
-        return self.tenant_repo.create(tenant)
+        created = self.tenant_repo.create(tenant)
+        # Registration must always provision the editable universal skeleton;
+        # pack selection is additive and never mutates Follei-owned templates.
+        from app.services.flows.service import ensure_tenant_workflow_runtime
+        ensure_tenant_workflow_runtime(self.tenant_repo.db, created.id, industry)
+        return created
 
     def update_tenant(self, tenant_id: UUID, **kwargs) -> Any:
         tenant = self.tenant_repo.update(tenant_id, **kwargs)

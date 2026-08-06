@@ -25,6 +25,7 @@ from app.models.onboarding_profile import OnboardingProfile
 from app.models.onboarding_contact_channel import OnboardingContactChannel
 from app.models.onboarding_goal import OnboardingGoal
 from app.models.learning_signal import LearningSignal
-from app.models.flows import FlowDefinition, FlowVersion, FlowEnrollment, FlowExecutionStep, CommunicationAsset
+from app.models.flows import FlowDefinition, FlowVersion, FlowEnrollment, FlowExecutionStep, CommunicationAsset, WorkflowTemplate, TenantWorkflowInstance, WorkflowApproval
+from app.models.crm import CRMRecord, CRMSyncRun, TenantCRMConnection
 
-__all__ = ["Tenant", "User", "Agent", "Conversation", "Message", "ConversationCitation", "Interaction", "Customer", "IntegrationConnection", "EmailOAuthState", "TenantEmailConnection", "Lead", "Campaign", "KnowledgeBase", "Document", "Chunk", "BusinessFactDraft", "Entity", "EntityRelation", "KnowledgeSyncEvent", "IndexingJob", "OnboardingProfile", "OnboardingContactChannel", "OnboardingGoal", "BusinessPlan", "CustomerSegment", "SLA", "LearningSignal", "FlowDefinition", "FlowVersion", "FlowEnrollment", "FlowExecutionStep", "CommunicationAsset"]
+__all__ = ["Tenant", "User", "Agent", "Conversation", "Message", "ConversationCitation", "Interaction", "Customer", "IntegrationConnection", "EmailOAuthState", "TenantEmailConnection", "Lead", "Campaign", "KnowledgeBase", "Document", "Chunk", "BusinessFactDraft", "Entity", "EntityRelation", "KnowledgeSyncEvent", "IndexingJob", "OnboardingProfile", "OnboardingContactChannel", "OnboardingGoal", "BusinessPlan", "CustomerSegment", "SLA", "LearningSignal", "FlowDefinition", "FlowVersion", "FlowEnrollment", "FlowExecutionStep", "CommunicationAsset", "WorkflowTemplate", "TenantWorkflowInstance", "WorkflowApproval", "TenantCRMConnection", "CRMRecord", "CRMSyncRun"]

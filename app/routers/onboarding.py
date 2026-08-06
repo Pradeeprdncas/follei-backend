@@ -175,6 +175,9 @@ def create_onboarding_profile(
     profile = repo.create(profile)
     channels = OnboardingContactChannelRepository(db).replace_for_tenant(profile.tenant_id, payload.contact_channels or [])
     goals = OnboardingGoalRepository(db).replace_for_tenant(profile.tenant_id, payload.goals or [])
+    if payload.industry in {"Financial Services", "Insurance"}:
+        from app.services.flows.service import ensure_tenant_workflow_runtime
+        ensure_tenant_workflow_runtime(db, profile.tenant_id, "insurance")
     return _response(profile, channels, goals)
 
 
@@ -194,6 +197,9 @@ def update_onboarding_profile(
     profile = repo.update(profile, **fields)
     channels = channel_repo.replace_for_tenant(profile.tenant_id, payload.contact_channels) if payload.contact_channels is not None else channel_repo.get_for_tenant(profile.tenant_id)
     goals = goal_repo.replace_for_tenant(profile.tenant_id, payload.goals) if payload.goals is not None else goal_repo.get_for_tenant(profile.tenant_id)
+    if profile.industry in {"Financial Services", "Insurance"}:
+        from app.services.flows.service import ensure_tenant_workflow_runtime
+        ensure_tenant_workflow_runtime(db, profile.tenant_id, "insurance")
     return _response(profile, channels, goals)
 
 

@@ -145,6 +145,27 @@ def upsert_lead_import_memory(*, tenant_id: str, lead_id: str, import_job_id: st
     return document
 
 
+def upsert_crm_record_memory(*, tenant_id: str, crm_record_id: str, provider: str, object_type: str, external_id: str, source_revision: int, normalized: dict[str, Any], raw: dict[str, Any], lead_id: str | None = None, customer_id: str | None = None) -> dict[str, Any]:
+    """Store the variable provider payload while PostgreSQL remains canonical."""
+    collection = get_context_database()["crm_record_memory"]
+    key = {"tenant_id": str(tenant_id), "provider": provider, "object_type": object_type, "external_id": str(external_id)}
+    document = {
+        **key,
+        "crm_record_id": str(crm_record_id),
+        "lead_id": str(lead_id) if lead_id else None,
+        "customer_id": str(customer_id) if customer_id else None,
+        "source_revision": int(source_revision),
+        "normalized": dict(normalized or {}),
+        "raw": dict(raw or {}),
+        "projection_type": "crm_provider_record",
+        "canonical_store": "postgres",
+        "semantic_store": "qdrant",
+        "updated_at": _now(),
+    }
+    collection.replace_one(key, document, upsert=True)
+    return document
+
+
 def append_lead_nurture_turn(
     *,
     tenant_id: str,
@@ -207,6 +228,23 @@ def append_lead_flow_event(*, tenant_id: str, lead_id: str, enrollment_id: str, 
         return existing
     history.append({"event_id": event_id, "enrollment_id": str(enrollment_id), "node_key": node_key, "event_type": event_type, "data": json.loads(json.dumps(data or {}, default=str)), "at": _now()})
     document = {**existing, **key, "flow_history": history[-200:], "last_flow_event": history[-1], "updated_at": _now()}
+    collection.replace_one(key, document, upsert=True)
+    return document
+
+
+def upsert_workflow_override_memory(*, tenant_id: str, workflow_instance_id: str, flow_version_id: str, version: int, overrides: dict[str, Any]) -> dict[str, Any]:
+    """Project tenant-editable workflow wording/layout while Postgres stays canonical."""
+    collection = get_context_database()["workflow_override_memory"]
+    key = {"tenant_id": str(tenant_id), "workflow_instance_id": str(workflow_instance_id)}
+    document = {
+        **key,
+        "flow_version_id": str(flow_version_id),
+        "version": int(version),
+        "overrides": json.loads(json.dumps(overrides or {}, default=str)),
+        "projection_type": "tenant_workflow_override",
+        "canonical_store": "postgres",
+        "updated_at": _now(),
+    }
     collection.replace_one(key, document, upsert=True)
     return document
 

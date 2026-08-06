@@ -14,7 +14,7 @@ from app.config.database import SessionLocal
 from app.config.qdrant import get_qdrant
 from app.config.settings import get_settings
 from app.models.knowledge.sync_event import KnowledgeSyncEvent
-from app.services.knowledge.memory_store import upsert_category_document_projection, upsert_document_memory, upsert_summary_memory
+from app.services.knowledge.memory_store import upsert_category_document_projection, upsert_crm_record_memory, upsert_document_memory, upsert_summary_memory
 from app.services.rag.embeddings.mistral import embed_texts
 from app.services.rag.vectorstore.insert import insert_chunks
 from app.services.rag.vectorstore.qdrant import ensure_collection
@@ -25,6 +25,7 @@ _TARGETS_BY_EVENT = {
     "document.indexed": ("ferret",),
     "fact.approved": ("qdrant",),
     "chunk.reviewed": ("qdrant",),
+    "crm.record.synced": ("ferret", "qdrant"),
 }
 Handler = Callable[[KnowledgeSyncEvent], Any | Awaitable[Any]]
 
@@ -119,6 +120,23 @@ async def _ferret_document(event: KnowledgeSyncEvent) -> str:
     return "completed"
 
 
+async def _ferret_crm_record(event: KnowledgeSyncEvent) -> str:
+    payload = event.payload or {}
+    upsert_crm_record_memory(
+        tenant_id=str(event.tenant_id),
+        crm_record_id=str(event.aggregate_id),
+        provider=str(payload["provider"]),
+        object_type=str(payload["object_type"]),
+        external_id=str(payload["external_id"]),
+        source_revision=int(payload.get("source_revision") or 1),
+        normalized=dict(payload.get("normalized") or {}),
+        raw=dict(payload.get("raw") or {}),
+        lead_id=payload.get("lead_id"),
+        customer_id=payload.get("customer_id"),
+    )
+    return "completed"
+
+
 async def _qdrant_summary(event: KnowledgeSyncEvent) -> str:
     payload = event.payload or {}
     summary = str(payload.get("summary") or "").strip()
@@ -169,10 +187,47 @@ async def _qdrant_approved_fact(event: KnowledgeSyncEvent) -> str:
     return "completed"
 
 
+async def _qdrant_crm_record(event: KnowledgeSyncEvent) -> str:
+    payload = event.payload or {}
+    normalized = dict(payload.get("normalized") or {})
+    object_type = str(payload.get("object_type") or "record")
+    fields = [
+        normalized.get("first_name"), normalized.get("last_name"), normalized.get("name"), normalized.get("title"),
+        normalized.get("company"), normalized.get("industry"), normalized.get("domain"), normalized.get("email"),
+        normalized.get("lifecycle_stage"), normalized.get("lead_status"), normalized.get("stage"), normalized.get("pipeline"),
+    ]
+    text = " ".join(str(value).strip() for value in fields if value not in (None, "")).strip()
+    if not text:
+        return "skipped"
+    vector = (await embed_texts([f"CRM {object_type}: {text}"]))[0]
+    ensure_collection()
+    insert_chunks(
+        [str(event.aggregate_id)],
+        [vector],
+        [{
+            "text": text,
+            "chunk_id": str(event.aggregate_id),
+            "tenant_id": str(event.tenant_id),
+            "lead_id": payload.get("lead_id"),
+            "customer_id": payload.get("customer_id"),
+            "source_type": "crm_record",
+            "provider": payload.get("provider"),
+            "crm_object_type": object_type,
+            "crm_external_id": payload.get("external_id"),
+            "source_revision": payload.get("source_revision"),
+            "approval_status": "system_verified",
+            "sensitivity": "internal",
+            "heading": f"CRM {object_type}",
+            "heading_path": ["CRM", str(payload.get("provider") or "provider"), object_type],
+        }],
+    )
+    return "completed"
+
+
 def default_handlers() -> dict[str, Handler]:
     return {
-        "ferret": lambda event: _ferret_document(event) if event.event_type == "document.indexed" else _ferret_summary(event),
-        "qdrant": lambda event: _qdrant_summary(event) if event.event_type == "conversation.summary.ready" else _qdrant_approved_fact(event),
+        "ferret": lambda event: _ferret_crm_record(event) if event.event_type == "crm.record.synced" else _ferret_document(event) if event.event_type == "document.indexed" else _ferret_summary(event),
+        "qdrant": lambda event: _qdrant_crm_record(event) if event.event_type == "crm.record.synced" else _qdrant_summary(event) if event.event_type == "conversation.summary.ready" else _qdrant_approved_fact(event),
     }
 
 
@@ -215,6 +270,10 @@ async def deliver_event(event: KnowledgeSyncEvent, *, handlers: dict[str, Handle
     event.status = "completed" if all(value in {"completed", "skipped"} for value in deliveries.values()) else "retrying"
     if event.status == "completed":
         event.completed_at = datetime.utcnow()
+        if event.event_type == "crm.record.synced" and "raw" in dict(event.payload or {}):
+            # The raw provider shape belongs in FerretDB. PostgreSQL keeps only
+            # the normalized delivery envelope after both projections finish.
+            event.payload = {key: value for key, value in dict(event.payload or {}).items() if key != "raw"} | {"raw_projected": True}
     if checkpoint:
         checkpoint()
     return event
