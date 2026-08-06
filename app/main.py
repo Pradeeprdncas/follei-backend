@@ -1,5 +1,8 @@
 ﻿from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.openapi.docs import get_swagger_ui_html, get_swagger_ui_oauth2_redirect_html
+from fastapi.staticfiles import StaticFiles
+from swagger_ui_bundle import swagger_ui_path
 from app.routers import upload_router, chat_router, health_router, knowledge_review_router, orchestrator_router
 from app.routers.conversation_memory import router as conversation_memory_router
 from app.routers.onboarding import router as onboarding_router
@@ -20,7 +23,29 @@ from loguru import logger
 
 
 def create_app() -> FastAPI:
-    app = FastAPI(title="Follei Backend", description="Enterprise RAG and business workforce API", version="1.0.0")
+    app = FastAPI(
+        title="Follei Backend",
+        description="Enterprise RAG and business workforce API",
+        version="1.0.0",
+        docs_url=None,
+    )
+    app.mount("/api-docs-assets", StaticFiles(directory=str(swagger_ui_path)), name="api-docs-assets")
+
+    @app.get("/docs", include_in_schema=False)
+    async def swagger_docs():
+        return get_swagger_ui_html(
+            openapi_url=app.openapi_url,
+            title=f"{app.title} - Swagger UI",
+            oauth2_redirect_url=app.swagger_ui_oauth2_redirect_url,
+            swagger_js_url="/api-docs-assets/swagger-ui-bundle.js",
+            swagger_css_url="/api-docs-assets/swagger-ui.css",
+            swagger_ui_parameters={"persistAuthorization": True, "displayRequestDuration": True},
+        )
+
+    @app.get(app.swagger_ui_oauth2_redirect_url, include_in_schema=False)
+    async def swagger_ui_redirect():
+        return get_swagger_ui_oauth2_redirect_html()
+
     app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=False, allow_methods=["*"], allow_headers=["*"])
     for router in (upload_router, chat_router, health_router, knowledge_review_router, orchestrator_router, conversation_memory_router, onboarding_router, channels_email_router, website_ingestion_router, websocket_router, voice_test_router, verification_ui_router, email_connections_router, channel_connections_router, flows_router, assets_router, crm_sync_router):
         app.include_router(router)
