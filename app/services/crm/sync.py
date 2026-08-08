@@ -17,7 +17,10 @@ from app.services.knowledge.outbox import enqueue_sync_event, process_sync_event
 
 def _encryption() -> EncryptionService:
     settings = get_settings()
-    return EncryptionService(settings.CRM_ENCRYPTION_KEY or settings.SECRET_KEY)
+    key = (settings.CRM_ENCRYPTION_KEY or settings.SECRET_KEY or "").strip()
+    if key in {"change-me", "change-me-crm-encryption-key"} or len(key) < 32:
+        raise RuntimeError("Configure CRM_ENCRYPTION_KEY (at least 32 characters) before storing CRM credentials")
+    return EncryptionService(key)
 
 
 def encrypt_crm_token(token: str) -> str:
