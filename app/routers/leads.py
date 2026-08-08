@@ -1,7 +1,9 @@
 from datetime import datetime, timezone
 from uuid import uuid4
 
-from fastapi import APIRouter, HTTPException, Query, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
+
+from app.core.security import get_authenticated_tenant_id, require_matching_tenant
 
 from app.schemas.lead import (
     CreateLeadRequest,
@@ -57,15 +59,16 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def _get_lead_or_404(lead_id: str) -> LeadResponse:
+def _get_lead_or_404(lead_id: str, tenant_id: str | None = None) -> LeadResponse:
     lead = LEADS.get(lead_id)
-    if lead is None:
+    if lead is None or (tenant_id is not None and lead.tenant_id != tenant_id):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Lead not found")
     return lead
 
 
 @router.post("", response_model=LeadResponse, status_code=status.HTTP_201_CREATED)
-def create_lead(payload: CreateLeadRequest) -> LeadResponse:
+def create_lead(payload: CreateLeadRequest, tenant_id: str = Depends(get_authenticated_tenant_id)) -> LeadResponse:
+    require_matching_tenant(payload.tenant_id, tenant_id)
     now = _now()
     lead_id = str(uuid4())
     lead = LeadResponse(
@@ -91,17 +94,18 @@ def create_lead(payload: CreateLeadRequest) -> LeadResponse:
 
 @router.get("", response_model=LeadListResponse)
 def list_leads(
-    tenant_id: str | None = None,
+    requested_tenant_id: str | None = Query(default=None, alias="tenant_id"),
     status_filter: str | None = Query(default=None, alias="status"),
     priority: str | None = None,
     assigned_to: str | None = None,
     source: str | None = None,
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=20, ge=1, le=100),
+    tenant_id: str = Depends(get_authenticated_tenant_id),
 ) -> LeadListResponse:
-    items = list(LEADS.values())
-    if tenant_id is not None:
-        items = [item for item in items if item.tenant_id == tenant_id]
+    if requested_tenant_id is not None:
+        require_matching_tenant(requested_tenant_id, tenant_id)
+    items = [item for item in LEADS.values() if item.tenant_id == tenant_id]
     if status_filter is not None:
         items = [item for item in items if item.status == status_filter]
     if priority is not None:
@@ -117,13 +121,13 @@ def list_leads(
 
 
 @router.get("/{lead_id}", response_model=LeadResponse)
-def get_lead(lead_id: str) -> LeadResponse:
-    return _get_lead_or_404(lead_id)
+def get_lead(lead_id: str, tenant_id: str = Depends(get_authenticated_tenant_id)) -> LeadResponse:
+    return _get_lead_or_404(lead_id, tenant_id)
 
 
 @router.patch("/{lead_id}", response_model=LeadResponse)
-def update_lead(lead_id: str, payload: UpdateLeadRequest) -> LeadResponse:
-    lead = _get_lead_or_404(lead_id)
+def update_lead(lead_id: str, payload: UpdateLeadRequest, tenant_id: str = Depends(get_authenticated_tenant_id)) -> LeadResponse:
+    lead = _get_lead_or_404(lead_id, tenant_id)
     data = payload.model_dump(exclude_unset=True)
     if "email" in data and data["email"] is not None:
         data["email"] = str(data["email"])
@@ -133,8 +137,8 @@ def update_lead(lead_id: str, payload: UpdateLeadRequest) -> LeadResponse:
 
 
 @router.delete("/{lead_id}", status_code=status.HTTP_204_NO_CONTENT)
-def delete_lead(lead_id: str) -> Response:
-    _get_lead_or_404(lead_id)
+def delete_lead(lead_id: str, tenant_id: str = Depends(get_authenticated_tenant_id)) -> Response:
+    _get_lead_or_404(lead_id, tenant_id)
     LEADS.pop(lead_id, None)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
@@ -154,8 +158,8 @@ def _get_meeting_or_404(meeting_id: str) -> MeetingResponse:
 
 
 @router.post("/{lead_id}/activities", response_model=LeadActivityResponse, status_code=status.HTTP_201_CREATED)
-def create_activity(lead_id: str, payload: LeadActivityRequest) -> LeadActivityResponse:
-    _get_lead_or_404(lead_id)
+def create_activity(lead_id: str, payload: LeadActivityRequest, tenant_id: str = Depends(get_authenticated_tenant_id)) -> LeadActivityResponse:
+    _get_lead_or_404(lead_id, tenant_id)
     activity_id = str(uuid4())
     activity = LeadActivityResponse(id=activity_id, lead_id=lead_id, created_at=_now(), **payload.model_dump())
     ACTIVITIES[activity_id] = activity
@@ -168,8 +172,9 @@ def list_activities(
     lead_id: str,
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=20, ge=1, le=100),
+    tenant_id: str = Depends(get_authenticated_tenant_id),
 ) -> LeadActivityListResponse:
-    _get_lead_or_404(lead_id)
+    _get_lead_or_404(lead_id, tenant_id)
     items = [ACTIVITIES[item_id] for item_id in LEAD_ACTIVITIES.get(lead_id, []) if item_id in ACTIVITIES]
     total = len(items)
     start = (page - 1) * page_size
@@ -177,8 +182,8 @@ def list_activities(
 
 
 @router.post("/{lead_id}/scores", response_model=LeadScoreResponse, status_code=status.HTTP_201_CREATED)
-def create_score(lead_id: str, payload: LeadScoreRequest) -> LeadScoreResponse:
-    lead = _get_lead_or_404(lead_id)
+def create_score(lead_id: str, payload: LeadScoreRequest, tenant_id: str = Depends(get_authenticated_tenant_id)) -> LeadScoreResponse:
+    lead = _get_lead_or_404(lead_id, tenant_id)
     base_score = 85 if payload.force_recalculate else max(lead.score, 50)
     score_id = str(uuid4())
     score = LeadScoreResponse(
@@ -201,8 +206,9 @@ def list_scores(
     lead_id: str,
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=20, ge=1, le=100),
+    tenant_id: str = Depends(get_authenticated_tenant_id),
 ) -> LeadScoreListResponse:
-    _get_lead_or_404(lead_id)
+    _get_lead_or_404(lead_id, tenant_id)
     items = [SCORES[item_id] for item_id in LEAD_SCORES.get(lead_id, []) if item_id in SCORES]
     total = len(items)
     start = (page - 1) * page_size
@@ -229,8 +235,8 @@ def list_frameworks(
 
 
 @router.post("/{lead_id}/qualifications", response_model=LeadQualificationResponse, status_code=status.HTTP_201_CREATED)
-def create_qualification(lead_id: str, payload: LeadQualificationRequest) -> LeadQualificationResponse:
-    _get_lead_or_404(lead_id)
+def create_qualification(lead_id: str, payload: LeadQualificationRequest, tenant_id: str = Depends(get_authenticated_tenant_id)) -> LeadQualificationResponse:
+    _get_lead_or_404(lead_id, tenant_id)
     if payload.framework_id not in FRAMEWORKS:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Qualification framework not found")
     qualification_id = str(uuid4())
@@ -251,8 +257,9 @@ def list_qualifications(
     lead_id: str,
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=20, ge=1, le=100),
+    tenant_id: str = Depends(get_authenticated_tenant_id),
 ) -> LeadQualificationListResponse:
-    _get_lead_or_404(lead_id)
+    _get_lead_or_404(lead_id, tenant_id)
     items = [QUALIFICATIONS[item_id] for item_id in LEAD_QUALIFICATIONS.get(lead_id, []) if item_id in QUALIFICATIONS]
     total = len(items)
     start = (page - 1) * page_size
