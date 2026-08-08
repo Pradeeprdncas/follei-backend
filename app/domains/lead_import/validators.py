@@ -15,7 +15,7 @@ _WEBSITE_RE = re.compile(
 )
 
 MINIMUM_ACCEPTED_LEADS = 50
-MINIMUM_CONTACT_METHODS = 1
+MINIMUM_CONTACT_METHODS = 2
 ACCEPTED_CONTACT_METHODS = ("email", "phone", "whatsapp")
 
 
@@ -24,7 +24,7 @@ def lead_import_policy() -> dict[str, Any]:
     return {
         "minimum_accepted_rows": MINIMUM_ACCEPTED_LEADS,
         "minimum_contact_methods": MINIMUM_CONTACT_METHODS,
-        "contactability_rule": "at_least_one_valid_channel",
+        "contactability_rule": "at_least_two_valid_channels",
         "accepted_contact_methods": list(ACCEPTED_CONTACT_METHODS),
         "required_contact_methods": [],
         "row_rejection_mode": "individual",
@@ -86,7 +86,7 @@ def validate_lead_row(extracted: dict[str, Any], *, minimum_contact_methods: int
     )
     if valid_contact_methods < minimum_contact_methods:
         errors.append(
-            "At least one valid contactable channel is required; provide email, phone, or WhatsApp"
+            "At least two valid contactable channels are required; provide any two of email, phone, or WhatsApp"
         )
 
     if email and not is_valid_email(email):
