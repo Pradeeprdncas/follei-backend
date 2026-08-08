@@ -2,7 +2,7 @@
 
 Revision ID: 20260808_lead_policy
 Revises: 
-Create Date: 2026-08-08 13:01:26.599383
+Create Date: 2026-08-08 13:11:55.763175
 """
 from alembic import op
 import sqlalchemy as sa
@@ -327,6 +327,30 @@ def upgrade() -> None:
     )
     op.create_index(op.f('ix_knowledge_tags_id'), 'knowledge_tags', ['id'], unique=False)
     op.create_index(op.f('ix_knowledge_tags_tenant_id'), 'knowledge_tags', ['tenant_id'], unique=False)
+    op.create_table('lead_import_jobs',
+    sa.Column('id', sa.Uuid(), nullable=False),
+    sa.Column('tenant_id', sa.Uuid(), nullable=False),
+    sa.Column('public_id', sa.String(), nullable=True),
+    sa.Column('filename', sa.String(), nullable=False),
+    sa.Column('file_type', sa.String(), nullable=False),
+    sa.Column('status', sa.String(), nullable=False),
+    sa.Column('uploaded_by', sa.String(), nullable=True),
+    sa.Column('total_rows', sa.Integer(), nullable=True),
+    sa.Column('valid_rows', sa.Integer(), nullable=True),
+    sa.Column('duplicate_rows', sa.Integer(), nullable=True),
+    sa.Column('invalid_rows', sa.Integer(), nullable=True),
+    sa.Column('statistics', postgresql.JSONB(astext_type=sa.Text()), nullable=True),
+    sa.Column('error_message', sa.Text(), nullable=True),
+    sa.Column('created_at', sa.DateTime(), nullable=True),
+    sa.Column('completed_at', sa.DateTime(), nullable=True),
+    sa.ForeignKeyConstraint(['tenant_id'], ['tenants.id'], ondelete='CASCADE'),
+    sa.PrimaryKeyConstraint('id')
+    )
+    op.create_index(op.f('ix_lead_import_jobs_created_at'), 'lead_import_jobs', ['created_at'], unique=False)
+    op.create_index(op.f('ix_lead_import_jobs_id'), 'lead_import_jobs', ['id'], unique=False)
+    op.create_index(op.f('ix_lead_import_jobs_public_id'), 'lead_import_jobs', ['public_id'], unique=True)
+    op.create_index(op.f('ix_lead_import_jobs_status'), 'lead_import_jobs', ['status'], unique=False)
+    op.create_index(op.f('ix_lead_import_jobs_tenant_id'), 'lead_import_jobs', ['tenant_id'], unique=False)
     op.create_table('leads',
     sa.Column('id', sa.Uuid(), nullable=False),
     sa.Column('tenant_id', sa.Uuid(), nullable=False),
@@ -1055,6 +1079,36 @@ def upgrade() -> None:
     )
     op.create_index(op.f('ix_knowledge_feedback_id'), 'knowledge_feedback', ['id'], unique=False)
     op.create_index(op.f('ix_knowledge_feedback_tenant_id'), 'knowledge_feedback', ['tenant_id'], unique=False)
+    op.create_table('lead_import_rows',
+    sa.Column('id', sa.Uuid(), nullable=False),
+    sa.Column('job_id', sa.Uuid(), nullable=False),
+    sa.Column('tenant_id', sa.Uuid(), nullable=False),
+    sa.Column('public_id', sa.String(), nullable=True),
+    sa.Column('row_index', sa.Integer(), nullable=False),
+    sa.Column('raw_data', postgresql.JSONB(astext_type=sa.Text()), nullable=False),
+    sa.Column('normalized_data', postgresql.JSONB(astext_type=sa.Text()), nullable=True),
+    sa.Column('extracted_data', postgresql.JSONB(astext_type=sa.Text()), nullable=True),
+    sa.Column('confidence', sa.Float(), nullable=True),
+    sa.Column('duplicate', sa.Boolean(), nullable=True),
+    sa.Column('duplicate_of', sa.Uuid(), nullable=True),
+    sa.Column('match_reason', sa.String(), nullable=True),
+    sa.Column('status', sa.String(), nullable=False),
+    sa.Column('selected', sa.Boolean(), nullable=True),
+    sa.Column('error', sa.Text(), nullable=True),
+    sa.Column('lead_id', sa.Uuid(), nullable=True),
+    sa.Column('created_at', sa.DateTime(), nullable=True),
+    sa.ForeignKeyConstraint(['job_id'], ['lead_import_jobs.id'], ondelete='CASCADE'),
+    sa.ForeignKeyConstraint(['lead_id'], ['leads.id'], ondelete='SET NULL'),
+    sa.ForeignKeyConstraint(['tenant_id'], ['tenants.id'], ondelete='CASCADE'),
+    sa.PrimaryKeyConstraint('id')
+    )
+    op.create_index(op.f('ix_lead_import_rows_duplicate'), 'lead_import_rows', ['duplicate'], unique=False)
+    op.create_index(op.f('ix_lead_import_rows_id'), 'lead_import_rows', ['id'], unique=False)
+    op.create_index(op.f('ix_lead_import_rows_job_id'), 'lead_import_rows', ['job_id'], unique=False)
+    op.create_index(op.f('ix_lead_import_rows_lead_id'), 'lead_import_rows', ['lead_id'], unique=False)
+    op.create_index(op.f('ix_lead_import_rows_public_id'), 'lead_import_rows', ['public_id'], unique=True)
+    op.create_index(op.f('ix_lead_import_rows_status'), 'lead_import_rows', ['status'], unique=False)
+    op.create_index(op.f('ix_lead_import_rows_tenant_id'), 'lead_import_rows', ['tenant_id'], unique=False)
     op.create_table('lead_scores',
     sa.Column('id', sa.Uuid(), nullable=False),
     sa.Column('lead_id', sa.Uuid(), nullable=False),
@@ -2572,6 +2626,14 @@ def downgrade() -> None:
     op.drop_index(op.f('ix_lead_scores_lead_id'), table_name='lead_scores')
     op.drop_index(op.f('ix_lead_scores_id'), table_name='lead_scores')
     op.drop_table('lead_scores')
+    op.drop_index(op.f('ix_lead_import_rows_tenant_id'), table_name='lead_import_rows')
+    op.drop_index(op.f('ix_lead_import_rows_status'), table_name='lead_import_rows')
+    op.drop_index(op.f('ix_lead_import_rows_public_id'), table_name='lead_import_rows')
+    op.drop_index(op.f('ix_lead_import_rows_lead_id'), table_name='lead_import_rows')
+    op.drop_index(op.f('ix_lead_import_rows_job_id'), table_name='lead_import_rows')
+    op.drop_index(op.f('ix_lead_import_rows_id'), table_name='lead_import_rows')
+    op.drop_index(op.f('ix_lead_import_rows_duplicate'), table_name='lead_import_rows')
+    op.drop_table('lead_import_rows')
     op.drop_index(op.f('ix_knowledge_feedback_tenant_id'), table_name='knowledge_feedback')
     op.drop_index(op.f('ix_knowledge_feedback_id'), table_name='knowledge_feedback')
     op.drop_table('knowledge_feedback')
@@ -2706,6 +2768,12 @@ def downgrade() -> None:
     op.drop_index(op.f('ix_leads_id'), table_name='leads')
     op.drop_index(op.f('ix_leads_email'), table_name='leads')
     op.drop_table('leads')
+    op.drop_index(op.f('ix_lead_import_jobs_tenant_id'), table_name='lead_import_jobs')
+    op.drop_index(op.f('ix_lead_import_jobs_status'), table_name='lead_import_jobs')
+    op.drop_index(op.f('ix_lead_import_jobs_public_id'), table_name='lead_import_jobs')
+    op.drop_index(op.f('ix_lead_import_jobs_id'), table_name='lead_import_jobs')
+    op.drop_index(op.f('ix_lead_import_jobs_created_at'), table_name='lead_import_jobs')
+    op.drop_table('lead_import_jobs')
     op.drop_index(op.f('ix_knowledge_tags_tenant_id'), table_name='knowledge_tags')
     op.drop_index(op.f('ix_knowledge_tags_id'), table_name='knowledge_tags')
     op.drop_table('knowledge_tags')
