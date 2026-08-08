@@ -1309,6 +1309,31 @@ def upgrade() -> None:
     op.create_index(op.f('ix_conversations_id'), 'conversations', ['id'], unique=False)
     op.create_index(op.f('ix_conversations_public_id'), 'conversations', ['public_id'], unique=True)
     op.create_index(op.f('ix_conversations_tenant_id'), 'conversations', ['tenant_id'], unique=False)
+    op.create_table('conversation_analyses',
+    sa.Column('id', sa.Uuid(), nullable=False),
+    sa.Column('conversation_id', sa.Uuid(), nullable=False),
+    sa.Column('tenant_id', sa.Uuid(), nullable=False),
+    sa.Column('status', sa.String(), nullable=False),
+    sa.Column('transcript', postgresql.JSONB(astext_type=sa.Text()), nullable=False),
+    sa.Column('sentiment', postgresql.JSONB(astext_type=sa.Text()), nullable=False),
+    sa.Column('emotion', postgresql.JSONB(astext_type=sa.Text()), nullable=False),
+    sa.Column('fusion', postgresql.JSONB(astext_type=sa.Text()), nullable=False),
+    sa.Column('lead_score', postgresql.JSONB(astext_type=sa.Text()), nullable=False),
+    sa.Column('claims', postgresql.JSONB(astext_type=sa.Text()), nullable=False),
+    sa.Column('verification', postgresql.JSONB(astext_type=sa.Text()), nullable=False),
+    sa.Column('summary', sa.Text(), nullable=True),
+    sa.Column('speakers', postgresql.JSONB(astext_type=sa.Text()), nullable=False),
+    sa.Column('duration_seconds', sa.Integer(), nullable=True),
+    sa.Column('error_message', sa.Text(), nullable=True),
+    sa.Column('created_at', sa.DateTime(), nullable=True),
+    sa.Column('updated_at', sa.DateTime(), nullable=False),
+    sa.ForeignKeyConstraint(['conversation_id'], ['conversations.id'], ondelete='CASCADE'),
+    sa.ForeignKeyConstraint(['tenant_id'], ['tenants.id'], ondelete='CASCADE'),
+    sa.PrimaryKeyConstraint('id')
+    )
+    op.create_index(op.f('ix_conversation_analyses_conversation_id'), 'conversation_analyses', ['conversation_id'], unique=True)
+    op.create_index(op.f('ix_conversation_analyses_id'), 'conversation_analyses', ['id'], unique=False)
+    op.create_index(op.f('ix_conversation_analyses_tenant_id'), 'conversation_analyses', ['tenant_id'], unique=False)
     op.create_table('crm_records',
     sa.Column('id', sa.Uuid(), nullable=False),
     sa.Column('tenant_id', sa.Uuid(), nullable=False),
@@ -2586,6 +2611,10 @@ def downgrade() -> None:
     op.drop_index(op.f('ix_crm_records_customer_id'), table_name='crm_records')
     op.drop_index(op.f('ix_crm_records_connection_id'), table_name='crm_records')
     op.drop_table('crm_records')
+    op.drop_index(op.f('ix_conversation_analyses_tenant_id'), table_name='conversation_analyses')
+    op.drop_index(op.f('ix_conversation_analyses_id'), table_name='conversation_analyses')
+    op.drop_index(op.f('ix_conversation_analyses_conversation_id'), table_name='conversation_analyses')
+    op.drop_table('conversation_analyses')
     op.drop_index(op.f('ix_conversations_tenant_id'), table_name='conversations')
     op.drop_index(op.f('ix_conversations_public_id'), table_name='conversations')
     op.drop_index(op.f('ix_conversations_id'), table_name='conversations')

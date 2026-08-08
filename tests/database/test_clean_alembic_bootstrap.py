@@ -42,7 +42,7 @@ def test_empty_postgres_reaches_head_using_alembic_upgrade_only(monkeypatch):
         missing_tables = set(Base.metadata.tables) - tables
         assert missing_tables == set(), f"Alembic omitted registered tables: {sorted(missing_tables)}"
         assert len(tables) == len(Base.metadata.tables) + 1
-        assert revision == "20260808_lead_import_registry"
+        assert revision == "20260808_model_registry"
 
         command.check(config)
         command.downgrade(config, "base")

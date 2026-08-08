@@ -8,7 +8,6 @@ from sqlalchemy.orm import relationship
 
 from app.database.base import Base
 from app.core.public_id import generate_public_id
-from app.models.tenancy import Tenant
 
 
 class LeadImportJob(Base):
@@ -36,7 +35,7 @@ class LeadImportJob(Base):
     created_at = Column(DateTime, default=datetime.utcnow, index=True)
     completed_at = Column(DateTime, nullable=True)
 
-    tenant = relationship(Tenant)
+    tenant = relationship("Tenant")
     rows = relationship("LeadImportRow", back_populates="job", cascade="all, delete-orphan", lazy="dynamic")
 
     def __init__(self, **kwargs):
@@ -73,7 +72,7 @@ class LeadImportRow(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
 
     job = relationship("LeadImportJob", back_populates="rows")
-    tenant = relationship(Tenant)
+    tenant = relationship("Tenant")
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
