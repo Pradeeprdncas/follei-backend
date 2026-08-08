@@ -90,3 +90,21 @@ def validate_lead_row(extracted: dict[str, Any], *, minimum_contact_methods: int
         errors.append(f"Invalid country: {country}")
 
     return errors
+
+
+def evaluate_lead_batch(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    """Apply the partial-accept contract without mutating or dropping evidence."""
+    validation = [
+        {"row_index": index, "row": row, "reasons": validate_lead_row(row)}
+        for index, row in enumerate(rows)
+    ]
+    accepted = [item for item in validation if not item["reasons"]]
+    rejected = [item for item in validation if item["reasons"]]
+    return {
+        "accepted": accepted,
+        "rejected": rejected,
+        "accepted_rows": len(accepted),
+        "rejected_rows": len(rejected),
+        "can_proceed": len(accepted) >= MINIMUM_ACCEPTED_LEADS,
+        "policy": lead_import_policy(),
+    }

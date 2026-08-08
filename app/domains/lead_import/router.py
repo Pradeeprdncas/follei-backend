@@ -37,6 +37,7 @@ from app.domains.lead_import.validators import (
     MINIMUM_ACCEPTED_LEADS,
     lead_import_policy,
     validate_lead_row,
+    evaluate_lead_batch,
     is_blank_row,
 )
 from app.models.leads.lead import Lead
@@ -231,11 +232,11 @@ async def import_leads(
     if not rows:
         raise HTTPException(status_code=400, detail="No data rows found in CSV")
 
-    validation = [(index, row, validate_lead_row(row)) for index, row in enumerate(rows)]
-    accepted_rows = sum(not errors for _, _, errors in validation)
+    batch = evaluate_lead_batch(rows)
+    accepted_rows = batch["accepted_rows"]
     rejected_preview = [
-        {"row_index": index, "reasons": errors}
-        for index, _, errors in validation if errors
+        {"row_index": item["row_index"], "reasons": item["reasons"]}
+        for item in batch["rejected"]
     ]
     if accepted_rows < MINIMUM_ONBOARDING_LEAD_ROWS:
         raise HTTPException(
@@ -264,7 +265,11 @@ async def import_leads(
 
     results: list[dict] = []
     try:
-        for i, row in enumerate(rows):
+        # Partial accept is literal: rejected rows are logged in the response
+        # and never passed to the persistence function. The batch proceeds only
+        # because at least 50 valid rows remain after these rejections.
+        for item in batch["accepted"]:
+            i, row = item["row_index"], item["row"]
             result = _write_lead(db, tenant_uuid, row)
             result["row_index"] = i
             results.append(result)
@@ -273,8 +278,11 @@ async def import_leads(
 
         created = sum(1 for r in results if r["action"] == "created")
         duplicates = sum(1 for r in results if r["action"] == "duplicate")
-        skipped = sum(1 for r in results if r["action"] == "skipped")
-        errors = [{"row_index": r["row_index"], "error": r.get("error", ""), "lead_id": r.get("lead_id")} for r in results if r["action"] != "created"]
+        skipped = sum(1 for r in results if r["action"] == "skipped") + batch["rejected_rows"]
+        errors = [
+            {"row_index": item["row_index"], "error": "; ".join(item["reasons"]), "reasons": item["reasons"]}
+            for item in batch["rejected"]
+        ] + [{"row_index": r["row_index"], "error": r.get("error", ""), "lead_id": r.get("lead_id")} for r in results if r["action"] != "created"]
 
         # Optional AI enrichment after insert (async)
         if run_ai and created > 0:
