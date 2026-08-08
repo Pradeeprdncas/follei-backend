@@ -57,7 +57,7 @@ def create_app() -> FastAPI:
     app.include_router(campaigns_router, prefix="/api/v1")
 
     # Restored working domain API surface from backup-before-cleanup.
-    from app.routers import api_v1, conversation, customers, integrations, leads, message, tools, database_crud
+    from app.routers import api_v1, conversation, customers, integrations, leads, message, tools
     from app.domains.lead_import.router import router as lead_import_router
     app.include_router(api_v1.router)
     app.include_router(conversation.router, prefix="/api")
@@ -77,7 +77,6 @@ def create_app() -> FastAPI:
     app.include_router(tools.tools_router, prefix="/api")
     app.include_router(tools.executions_router, prefix="/api")
     app.include_router(tools.logs_router, prefix="/api")
-    app.include_router(database_crud.router, prefix="/api")
 
     @app.on_event("startup")
     async def startup():
