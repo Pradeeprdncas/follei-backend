@@ -354,8 +354,11 @@ def register(payload: RegisterRequest, db: Session = Depends(get_db)) -> Registe
 
     tenant_insert = text(
         """
-        INSERT INTO tenants (id, name, domain, slug, status, is_active, timezone, auto_reply_enabled, created_at, updated_at)
-        VALUES (:id, :name, :domain, :slug, 'active', true, :timezone, false, :now, :now)
+        INSERT INTO tenants (
+            id, name, domain, slug, status, is_active, industry_pack_activated,
+            timezone, auto_reply_enabled, lead_contact_requirement, created_at, updated_at
+        )
+        VALUES (:id, :name, :domain, :slug, 'active', true, false, :timezone, false, 1, :now, :now)
         """
     )
     tenant_params = {"id": tenant_id, "name": payload.tenant_name, "domain": domain, "slug": payload.tenant_name.lower().replace(" ", "-"), "timezone": "Asia/Kolkata", "now": _now()}

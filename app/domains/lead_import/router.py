@@ -35,7 +35,7 @@ from app.domains.lead_import.constants import FileType
 from app.domains.lead_import.utils import detect_file_type
 from app.domains.lead_import.validators import (
     MINIMUM_ACCEPTED_LEADS,
-    lead_import_policy,
+    resolve_lead_import_policy,
     validate_lead_row,
     evaluate_lead_batch,
     is_blank_row,
@@ -102,7 +102,12 @@ def _normalise_header(h: str) -> str:
 
 def _parse_csv(content: str) -> list[dict]:
     """Parse CSV with csv.DictReader and normalise headers."""
-    dialect = csv.Sniffer().sniff(content[:4096])
+    try:
+        dialect = csv.Sniffer().sniff(content[:4096])
+    except csv.Error:
+        # A valid email-only import has one column, so there is no delimiter
+        # for Sniffer to infer. The standard CSV dialect handles it correctly.
+        dialect = csv.excel
     reader = csv.DictReader(io.StringIO(content), dialect=dialect)
     # Normalise headers
     reader.fieldnames = [_normalise_header(h) for h in reader.fieldnames]
@@ -126,9 +131,9 @@ def _parse_csv(content: str) -> list[dict]:
 _RowImportResult = list[dict]  # list of {row_index, email, action, error?, lead_id?}
 
 
-def _write_lead(db, tenant_id, row: dict) -> dict:
+def _write_lead(db, tenant_id, row: dict, *, policy: dict) -> dict:
     """Insert or skip a single lead row. Returns result dict."""
-    validation_errors = validate_lead_row(row)
+    validation_errors = validate_lead_row(row, policy=policy)
     if validation_errors:
         return {"action": "skipped", "error": "; ".join(validation_errors)}
     email = row.get("email", "").strip().lower()
@@ -224,6 +229,12 @@ async def import_leads(
     """
     if not file.filename:
         raise HTTPException(status_code=400, detail="No file provided")
+    require_matching_tenant(tenant_id, authenticated_tenant_id)
+    try:
+        tenant_uuid = UUID(tenant_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid tenant_id")
+    policy = resolve_lead_import_policy(db, tenant_uuid)
 
     content = await file.read()
     try:
@@ -235,7 +246,7 @@ async def import_leads(
     if not rows:
         raise HTTPException(status_code=400, detail="No data rows found in CSV")
 
-    batch = evaluate_lead_batch(rows)
+    batch = evaluate_lead_batch(rows, policy=policy)
     accepted_rows = batch["accepted_rows"]
     rejected_preview = [
         {"row_index": item["row_index"], "reasons": item["reasons"]}
@@ -251,6 +262,7 @@ async def import_leads(
                 "rejected_rows": len(rows) - accepted_rows,
                 "row_errors": rejected_preview[:100],
                 "partial_accept": True,
+                "policy": policy,
             },
         )
 
@@ -260,12 +272,6 @@ async def import_leads(
             detail=f"CSV has {len(rows)} rows (max 1000 for sync import). Use POST /leads/import/async for large files."
         )
 
-    require_matching_tenant(tenant_id, authenticated_tenant_id)
-    try:
-        tenant_uuid = UUID(tenant_id)
-    except ValueError:
-        raise HTTPException(status_code=400, detail="Invalid tenant_id")
-
     results: list[dict] = []
     try:
         # Partial accept is literal: rejected rows are logged in the response
@@ -273,7 +279,7 @@ async def import_leads(
         # because at least 50 valid rows remain after these rejections.
         for item in batch["accepted"]:
             i, row = item["row_index"], item["row"]
-            result = _write_lead(db, tenant_uuid, row)
+            result = _write_lead(db, tenant_uuid, row, policy=policy)
             result["row_index"] = i
             results.append(result)
 
@@ -315,7 +321,7 @@ async def import_leads(
             created=created, duplicates=duplicates, skipped=skipped, total=len(rows), errors=errors,
             accepted_rows=accepted_rows, rejected_rows=len(rows) - accepted_rows,
             can_proceed=accepted_rows >= MINIMUM_ONBOARDING_LEAD_ROWS,
-            policy=lead_import_policy(), flow_enrollment=flow_enrollment,
+            policy=policy, flow_enrollment=flow_enrollment,
         )
     except Exception:
         db.rollback()
@@ -328,6 +334,7 @@ async def import_leads(
 async def preview_import(
     file: UploadFile = File(...),
     authenticated_tenant_id: str = Depends(get_authenticated_tenant_id),
+    db: Session = Depends(get_db),
 ):
     """Preview CSV import — parse and show rows with validation errors, no DB writes."""
     if not file.filename:
@@ -343,9 +350,10 @@ async def preview_import(
     if not rows:
         raise HTTPException(status_code=400, detail="No data rows found in CSV")
 
+    policy = resolve_lead_import_policy(db, authenticated_tenant_id)
     preview_rows = []
     for i, row in enumerate(rows):
-        errs = validate_lead_row(row)
+        errs = validate_lead_row(row, policy=policy)
         if not row.get("email") and not row.get("first_name") and not row.get("full_name"):
             errs = ["Blank row"] + errs
         preview_rows.append(PreviewRow(row_index=i, data=row, errors=errs))
@@ -360,7 +368,7 @@ async def preview_import(
         valid_rows=valid,
         invalid_rows=len(preview_rows) - valid,
         batch_errors=batch_errors,
-        policy={**lead_import_policy(), "can_proceed": valid >= MINIMUM_ONBOARDING_LEAD_ROWS},
+        policy={**policy, "can_proceed": valid >= MINIMUM_ONBOARDING_LEAD_ROWS},
     )
 
 

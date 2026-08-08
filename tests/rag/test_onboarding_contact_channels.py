@@ -44,6 +44,7 @@ def test_create_with_multiple_channels(tenant_and_token):
     )
     assert resp.status_code == 201
     assert sorted(resp.json()["contact_channels"]) == ["Email", "WhatsApp"]
+    assert resp.json()["lead_contact_requirement"] == 1
 
 
 def test_invalid_channel_rejected(tenant_and_token):
@@ -78,6 +79,38 @@ def test_patch_without_contact_channels_leaves_existing_selection_untouched(tena
     resp = client.patch("/api/v1/onboarding/profile", json={"website": "https://acme.example"}, headers=_auth(token))
     assert resp.status_code == 200
     assert sorted(resp.json()["contact_channels"]) == ["Email", "Phone"]
+
+
+def test_channel_setup_can_raise_tenant_lead_contact_requirement(tenant_and_token):
+    tenant_id, token = tenant_and_token
+    created = client.post(
+        "/api/v1/onboarding/profile",
+        json={
+            "company_name": "Acme",
+            "timezone": "Asia/Kolkata",
+            "industry": "SaaS",
+            "contact_channels": ["Email", "WhatsApp"],
+            "lead_contact_requirement": 2,
+        },
+        headers=_auth(token),
+    )
+    assert created.status_code == 201
+    assert created.json()["lead_contact_requirement"] == 2
+
+    updated = client.patch(
+        "/api/v1/onboarding/profile",
+        json={"lead_contact_requirement": 1},
+        headers=_auth(token),
+    )
+    assert updated.status_code == 200
+    assert updated.json()["lead_contact_requirement"] == 1
+
+    db = SessionLocal()
+    try:
+        tenant = db.get(Tenant, uuid.UUID(tenant_id))
+        assert tenant.lead_contact_requirement == 1
+    finally:
+        db.close()
 
 
 def test_duplicate_channels_are_deduplicated(tenant_and_token):

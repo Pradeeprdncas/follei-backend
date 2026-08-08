@@ -11,7 +11,7 @@ from app.domains.lead_import.constants import ImportStatus, RowStatus
 from app.domains.lead_import.models import LeadImportJob, LeadImportRow
 from app.domains.lead_import.repository import LeadImportRepository
 from app.domains.lead_import.parsers import ParserFactory, ExtractedDocument
-from app.domains.lead_import.validators import MINIMUM_ACCEPTED_LEADS, lead_import_policy, validate_lead_row, is_blank_row
+from app.domains.lead_import.validators import MINIMUM_ACCEPTED_LEADS, resolve_lead_import_policy, validate_lead_row, is_blank_row
 from app.domains.lead_import.utils import (
     split_full_name,
     normalize_email,
@@ -439,9 +439,9 @@ class LeadImportService:
             # Phase 5: Validate
             t0 = time.perf_counter()
             self.repo.update_job_status(job.id, ImportStatus.VALIDATING)
-            accepted_rows, rejected_rows = self._validate_rows(job.id)
+            accepted_rows, rejected_rows, contact_policy = self._validate_rows(job.id)
             policy_state = {
-                **lead_import_policy(),
+                **contact_policy,
                 "accepted_rows": accepted_rows,
                 "rejected_rows": rejected_rows,
                 "can_proceed": accepted_rows >= MINIMUM_ACCEPTED_LEADS,
@@ -1030,8 +1030,12 @@ class LeadImportService:
 
         return leads
 
-    def _validate_rows(self, job_id: UUID) -> tuple[int, int]:
+    def _validate_rows(self, job_id: UUID) -> tuple[int, int, dict]:
         """Reject rows individually; never fail the whole batch during validation."""
+        job = self.repo.get_job(job_id)
+        if not job:
+            raise JobNotFoundError(f"Lead import job not found: {job_id}")
+        policy = resolve_lead_import_policy(self.repo.db, job.tenant_id)
         rows = self.repo.get_rows_by_job(job_id)
         accepted = 0
         rejected = 0
@@ -1044,13 +1048,13 @@ class LeadImportService:
                 self.repo.update_row(row.id, status=RowStatus.INVALID, error="Blank row", selected=False)
                 rejected += 1
                 continue
-            errors = validate_lead_row(extracted)
+            errors = validate_lead_row(extracted, policy=policy)
             if errors:
                 self.repo.update_row(row.id, status=RowStatus.INVALID, error="; ".join(errors), selected=False)
                 rejected += 1
             else:
                 accepted += 1
-        return accepted, rejected
+        return accepted, rejected, policy
 
     def _deduplicate_rows(self, job_id: UUID) -> None:
         """Compare each valid row against the existing Lead table and classify."""

@@ -1,6 +1,6 @@
 ﻿import uuid
 from datetime import datetime
-from sqlalchemy import Column, String, Boolean, DateTime, ForeignKey, Uuid
+from sqlalchemy import Column, String, Boolean, DateTime, ForeignKey, Integer, Uuid
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import relationship
 
@@ -51,6 +51,7 @@ class Tenant(Base):
     forwarding_number = Column(String, nullable=True)
     auto_reply_enabled = Column(Boolean, default=False, nullable=False)
     channel_config = Column(JSONB, nullable=True)
+    lead_contact_requirement = Column(Integer, default=1, nullable=False)
 
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)

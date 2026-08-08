@@ -87,6 +87,7 @@ class OnboardingProfileCreate(BaseModel):
     industry_other: str | None = Field(None, max_length=255)
     company_size: str | None = Field(None)
     contact_channels: list[str] | None = Field(None)
+    lead_contact_requirement: int = Field(1, ge=1, le=3)
     goals: list[str] | None = Field(None)
 
     _check_industry = field_validator("industry")(_validate_industry)
@@ -110,6 +111,7 @@ class OnboardingProfileUpdate(BaseModel):
     industry_other: str | None = Field(None, max_length=255)
     company_size: str | None = Field(None)
     contact_channels: list[str] | None = Field(None)
+    lead_contact_requirement: int | None = Field(None, ge=1, le=3)
     goals: list[str] | None = Field(None)
 
     _check_industry = field_validator("industry")(_validate_industry)
@@ -137,10 +139,16 @@ class OnboardingProfileResponse(BaseModel):
     industry_other: str | None
     company_size: str | None
     contact_channels: list[str]
+    lead_contact_requirement: int
     goals: list[str]
 
 
-def _response(profile: OnboardingProfile, contact_channels: list[str], goals: list[str]) -> OnboardingProfileResponse:
+def _response(
+    profile: OnboardingProfile,
+    contact_channels: list[str],
+    goals: list[str],
+    lead_contact_requirement: int,
+) -> OnboardingProfileResponse:
     return OnboardingProfileResponse(
         id=str(profile.id),
         tenant_id=str(profile.tenant_id),
@@ -152,6 +160,7 @@ def _response(profile: OnboardingProfile, contact_channels: list[str], goals: li
         industry_other=profile.industry_other,
         company_size=profile.company_size,
         contact_channels=contact_channels,
+        lead_contact_requirement=lead_contact_requirement,
         goals=goals,
     )
 
@@ -212,8 +221,13 @@ def create_onboarding_profile(
     profile = repo.create(profile)
     channels = OnboardingContactChannelRepository(db).replace_for_tenant(profile.tenant_id, payload.contact_channels or [])
     goals = OnboardingGoalRepository(db).replace_for_tenant(profile.tenant_id, payload.goals or [])
+    tenant = db.get(Tenant, profile.tenant_id)
+    if not tenant:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found")
+    tenant.lead_contact_requirement = payload.lead_contact_requirement
+    db.commit()
     _activate_industry_pack(db, profile.tenant_id, payload.industry)
-    return _response(profile, channels, goals)
+    return _response(profile, channels, goals, tenant.lead_contact_requirement)
 
 
 @router.patch("/profile", response_model=OnboardingProfileResponse)
@@ -228,17 +242,21 @@ def update_onboarding_profile(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No onboarding profile exists yet for this tenant; POST one first")
     channel_repo = OnboardingContactChannelRepository(db)
     goal_repo = OnboardingGoalRepository(db)
-    fields = payload.model_dump(exclude={"contact_channels", "goals"}, exclude_unset=True)
+    fields = payload.model_dump(exclude={"contact_channels", "goals", "lead_contact_requirement"}, exclude_unset=True)
     profile = repo.update(profile, **fields)
     channels = channel_repo.replace_for_tenant(profile.tenant_id, payload.contact_channels) if payload.contact_channels is not None else channel_repo.get_for_tenant(profile.tenant_id)
     goals = goal_repo.replace_for_tenant(profile.tenant_id, payload.goals) if payload.goals is not None else goal_repo.get_for_tenant(profile.tenant_id)
+    tenant = db.get(Tenant, profile.tenant_id)
+    if not tenant:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found")
+    if payload.lead_contact_requirement is not None:
+        tenant.lead_contact_requirement = payload.lead_contact_requirement
+        db.commit()
     if payload.industry is not None:
-        tenant = db.get(Tenant, profile.tenant_id)
-        if tenant:
-            tenant.industry_pack_activated = False
-            db.commit()
+        tenant.industry_pack_activated = False
+        db.commit()
         _activate_industry_pack(db, profile.tenant_id, profile.industry)
-    return _response(profile, channels, goals)
+    return _response(profile, channels, goals, tenant.lead_contact_requirement)
 
 
 class OnboardingUserProfileUpdate(BaseModel):
