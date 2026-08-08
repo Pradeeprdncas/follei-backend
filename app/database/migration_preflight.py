@@ -9,7 +9,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[2]
-VERSIONS = ROOT / "alembic" / "versions"
+VERSIONS = ROOT / "alembic" / "current_versions"
 BACKUPS = ROOT / "logs" / "migration-repairs"
 
 

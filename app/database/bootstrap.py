@@ -1,18 +1,11 @@
-"""Prepare the local database without mixing schema-management strategies.
-
-A brand-new Follei database is created from the canonical SQLAlchemy metadata
-and stamped at the current Alembic head.  An already versioned database is
-upgraded through Alembic only.  Running both operations on every startup is
-unsafe: ``create_all`` can create objects that a pending migration then tries
-to create again.
-"""
+"""Prepare local databases exclusively through the canonical Alembic chain."""
 from __future__ import annotations
 
 from pathlib import Path
 
 from alembic import command
 from alembic.config import Config
-from sqlalchemy import Column, MetaData, String, Table, inspect
+from sqlalchemy import inspect
 
 from app.database.base import Base
 from app.config.database import engine
@@ -26,17 +19,6 @@ ALEMBIC_VERSION_TABLE = "alembic_version"
 def _alembic_config() -> Config:
     root = Path(__file__).resolve().parents[2]
     return Config(str(root / "alembic.ini"))
-
-
-def _create_wide_version_table() -> None:
-    """Create Alembic's marker with room for descriptive revision IDs."""
-    metadata = MetaData()
-    Table(
-        ALEMBIC_VERSION_TABLE,
-        metadata,
-        Column("version_num", String(128), primary_key=True, nullable=False),
-    )
-    metadata.create_all(bind=engine)
 
 
 def ensure_base_schema() -> tuple[str, int]:
@@ -63,9 +45,7 @@ def ensure_base_schema() -> tuple[str, int]:
             "run `python -m alembic stamp head` once before starting Follei."
         )
 
-    Base.metadata.create_all(bind=engine)
-    _create_wide_version_table()
-    command.stamp(_alembic_config(), "head")
+    command.upgrade(_alembic_config(), "head")
     return "initialized", len(canonical_tables)
 
 
