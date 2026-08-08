@@ -19,7 +19,7 @@ from app.services.knowledge.crawlers import supported_engines
 from app.services.knowledge.website_ingestion import validate_public_url
 
 
-router = APIRouter(prefix="/knowledge/websites", tags=["knowledge-websites"])
+router = APIRouter(prefix="/api/v1/knowledge/websites", tags=["knowledge-websites"])
 _settings = get_settings()
 
 
