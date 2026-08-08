@@ -1,5 +1,6 @@
 import pytest
 from app.services.knowledge import website_ingestion
+from app.services.knowledge.crawlers import registry
 
 
 def test_rejects_private_resolved_address(monkeypatch):
@@ -62,3 +63,29 @@ async def test_crawl_initializes_total_byte_counter_and_returns_page(monkeypatch
     pages = await website_ingestion.crawl_website("https://example.com/", max_pages=1)
 
     assert pages == [{"url": "https://example.com/", "title": "Acme", "text": "# Pricing\nEnterprise is USD 999."}]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("engine", ["aiohttp", "crawl4ai", "scrapy"])
+async def test_every_engine_preserves_ssrf_rejection(engine):
+    with pytest.raises(ValueError, match="private or non-public"):
+        await registry.crawl_with_adapter("http://127.0.0.1/", engine=engine)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("engine", ["aiohttp", "crawl4ai", "scrapy"])
+@pytest.mark.parametrize(
+    ("error", "message"),
+    [
+        (PermissionError("robots.txt disallows this crawl"), "robots.txt"),
+        (ValueError("Crawl attempted to leave the verified domain"), "leave the verified domain"),
+    ],
+)
+async def test_every_engine_preserves_common_crawl_policy(monkeypatch, engine, error, message):
+    async def reject_before_adapter(*_args, **_kwargs):
+        raise error
+
+    monkeypatch.setattr(registry, "crawl_website", reject_before_adapter)
+
+    with pytest.raises(type(error), match=message):
+        await registry.crawl_with_adapter("https://example.com/", engine=engine)
