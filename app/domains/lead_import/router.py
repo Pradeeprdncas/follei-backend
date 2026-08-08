@@ -78,6 +78,7 @@ for canonical, variants in [
     ("full_name",     ["name", "full name", "fullname", "contact name", "contact_name", "person name", "person_name"]),
     ("company",       ["company", "organization", "organisation", "org", "business", "firm", "account", "employer", "company name", "company_name", "business name", "business_name"]),
     ("phone",         ["phone", "mobile", "cell", "telephone", "tel", "contact", "contact no", "contact_no", "contact number", "contact_number", "phone number", "phone_number", "phone no", "phone_no", "mobile number", "mobile_number", "mobile no", "mobile_no", "phone #", "cell phone", "cellphone", "work phone", "home phone"]),
+    ("whatsapp",      ["whatsapp", "whats app", "whats_app", "whatsapp number", "whatsapp_number", "whatsapp no", "whatsapp_no", "whatsapp phone", "whatsapp_phone"]),
     ("website",       ["website", "web", "url", "site", "domain", "web page", "web_page", "web site", "web_site"]),
     ("linkedin",      ["linkedin", "linked in", "linked_in", "linkedin url", "linkedin_url", "linkedin profile", "linkedin_profile", "linked in url", "linked in profile"]),
     ("designation",   ["designation", "title", "position", "role", "job title", "job_title", "job role", "job_role", "job position", "job_position"]),
@@ -91,7 +92,7 @@ for canonical, variants in [
 ]:
     for v in variants:
         _HEADER_MAP[v] = canonical
-for c in ["email", "first_name", "last_name", "full_name", "company", "phone", "website", "linkedin", "designation", "department", "city", "state", "country", "postal_code", "industry", "notes"]:
+for c in ["email", "first_name", "last_name", "full_name", "company", "phone", "whatsapp", "website", "linkedin", "designation", "department", "city", "state", "country", "postal_code", "industry", "notes"]:
     _HEADER_MAP[c] = c
 
 
@@ -133,9 +134,11 @@ def _write_lead(db, tenant_id, row: dict) -> dict:
     email = row.get("email", "").strip().lower()
 
     # Dedup by email within tenant
-    existing = db.execute(
-        select(Lead).where(Lead.tenant_id == tenant_id, Lead.email == email)
-    ).scalar_one_or_none()
+    existing = None
+    if email:
+        existing = db.execute(
+            select(Lead).where(Lead.tenant_id == tenant_id, Lead.email == email)
+        ).scalar_one_or_none()
     if existing:
         return {"action": "duplicate", "error": f"Email already exists: {email}", "lead_id": str(existing.id)}
 

@@ -168,6 +168,7 @@ LEAD_FIELD_MAP = {
     "department": "department",
     "email": "email",
     "phone": "phone",
+    "whatsapp": "whatsapp",
     "website": "website",
     "linkedin": "linkedin",
     "city": "city",
@@ -193,6 +194,7 @@ for canonical, variants in [
     ("company", ["company", "organization", "organisation", "org", "business", "firm", "account", "employer", "company name", "company_name", "business name", "business_name", "works at", "works_at"]),
     ("email", ["email", "e-mail", "mail", "email address", "email_address", "contact email", "contact_email", "email id", "email_id", "mail id", "mail_id"]),
     ("phone", ["phone", "mobile", "cell", "telephone", "tel", "contact no", "contact_no", "contact number", "contact_number", "phone number", "phone_number", "mobile number", "mobile_number", "phone no", "phone_no", "mobile no", "mobile_no", "phone #"]),
+    ("whatsapp", ["whatsapp", "whats app", "whats_app", "whatsapp number", "whatsapp_number", "whatsapp no", "whatsapp_no", "whatsapp phone", "whatsapp_phone"]),
     ("website", ["website", "web", "url", "site", "domain", "web page", "web_page", "web site", "web_site"]),
     ("linkedin", ["linkedin", "linked in", "linked_in", "linkedin url", "linkedin_url", "linkedin profile", "linkedin_profile"]),
     ("designation", ["designation", "title", "position", "role", "job title", "job_title", "job role", "job_role", "job position", "job_position"]),
@@ -1298,10 +1300,6 @@ class LeadImportService:
                 continue
 
             email = (extracted.get("email") or "").strip()
-            if not email:
-                invalid_attempts += 1
-                self.repo.update_row(row.id, status=RowStatus.SKIPPED, error="No email after extraction")
-                continue
 
             if status == RowStatus.UPDATE and row.duplicate_of:
                 existing = self.repo.db.get(Lead, row.duplicate_of)

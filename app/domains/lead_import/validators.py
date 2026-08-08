@@ -15,7 +15,8 @@ _WEBSITE_RE = re.compile(
 )
 
 MINIMUM_ACCEPTED_LEADS = 50
-MINIMUM_CONTACT_METHODS = 2
+MINIMUM_CONTACT_METHODS = 1
+ACCEPTED_CONTACT_METHODS = ("email", "phone", "whatsapp")
 
 
 def lead_import_policy() -> dict[str, Any]:
@@ -23,7 +24,9 @@ def lead_import_policy() -> dict[str, Any]:
     return {
         "minimum_accepted_rows": MINIMUM_ACCEPTED_LEADS,
         "minimum_contact_methods": MINIMUM_CONTACT_METHODS,
-        "required_contact_methods": ["email", "phone"],
+        "contactability_rule": "at_least_one_valid_channel",
+        "accepted_contact_methods": list(ACCEPTED_CONTACT_METHODS),
+        "required_contact_methods": [],
         "row_rejection_mode": "individual",
         "batch_policy": "partial_accept",
     }
@@ -72,16 +75,26 @@ def validate_lead_row(extracted: dict[str, Any], *, minimum_contact_methods: int
 
     email = extracted.get("email")
     phone = extracted.get("phone")
-    contact_methods = sum(bool(value and str(value).strip()) for value in (email, phone))
-    if contact_methods < minimum_contact_methods:
+    whatsapp = extracted.get("whatsapp")
+
+    valid_contact_methods = sum(
+        (
+            is_valid_email(email),
+            is_valid_phone(phone),
+            is_valid_phone(whatsapp),
+        )
+    )
+    if valid_contact_methods < minimum_contact_methods:
         errors.append(
-            f"At least {minimum_contact_methods} contact methods are required; provide both email and phone"
+            "At least one valid contactable channel is required; provide email, phone, or WhatsApp"
         )
 
     if email and not is_valid_email(email):
         errors.append(f"Invalid email: {email}")
     if phone and not is_valid_phone(phone):
         errors.append(f"Invalid phone: {phone}")
+    if whatsapp and not is_valid_phone(whatsapp):
+        errors.append(f"Invalid WhatsApp: {whatsapp}")
     website = extracted.get("website")
     if website and not is_valid_website(website):
         errors.append(f"Invalid website: {website}")
