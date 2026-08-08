@@ -1,6 +1,7 @@
 """Generalized Google Workspace OAuth and incremental resource API adapter."""
 from __future__ import annotations
 
+import base64
 import secrets
 from datetime import datetime, timedelta
 from typing import Any
@@ -27,6 +28,19 @@ RESOURCE_SCOPES = {
     "contacts": "https://www.googleapis.com/auth/contacts.readonly",
 }
 DEFAULT_RESOURCES = tuple(RESOURCE_SCOPES)
+MAX_SYNC_CONTENT_BYTES = 10 * 1024 * 1024
+DRIVE_EXPORT_MIME_TYPES = {
+    "application/vnd.google-apps.document": "text/plain",
+    "application/vnd.google-apps.spreadsheet": "text/csv",
+    "application/vnd.google-apps.presentation": "application/pdf",
+    "application/vnd.google-apps.drawing": "application/pdf",
+}
+DRIVE_METADATA_ONLY_MIME_TYPES = {
+    "application/vnd.google-apps.folder",
+    "application/vnd.google-apps.form",
+    "application/vnd.google-apps.shortcut",
+    "application/vnd.google-apps.site",
+}
 
 
 class GoogleWorkspaceError(RuntimeError):
@@ -142,46 +156,322 @@ class GoogleWorkspaceOAuthService:
         return token
 
     async def fetch_resource(self, token: str, resource: str, cursor: str | None = None, max_pages: int = 10) -> tuple[list[dict], str | None]:
+        if resource not in RESOURCE_SCOPES:
+            raise GoogleWorkspaceError(f"Unsupported Google resource: {resource}")
+        headers = {"Authorization": f"Bearer {token}"}
+        async with httpx.AsyncClient(timeout=30) as client:
+            if resource == "gmail":
+                return await self._fetch_gmail(client, headers, cursor=cursor, max_pages=max_pages)
+            if resource == "drive":
+                return await self._fetch_drive(client, headers, cursor=cursor, max_pages=max_pages)
+            return await self._fetch_structured_resource(
+                client,
+                headers,
+                resource=resource,
+                cursor=cursor,
+                max_pages=max_pages,
+            )
+
+    async def _fetch_structured_resource(
+        self,
+        client: httpx.AsyncClient,
+        headers: dict[str, str],
+        *,
+        resource: str,
+        cursor: str | None,
+        max_pages: int,
+    ) -> tuple[list[dict], str | None]:
         records: list[dict] = []
         next_page: str | None = None
         final_cursor = cursor
-        async with httpx.AsyncClient(timeout=30) as client:
-            for _ in range(max_pages):
-                if resource == "gmail":
-                    url = "https://gmail.googleapis.com/gmail/v1/users/me/messages"
-                    params = {"maxResults": 100, **({"pageToken": next_page} if next_page else {})}
-                elif resource == "drive":
-                    url = "https://www.googleapis.com/drive/v3/files"
-                    params = {"pageSize": 100, "q": "trashed = false", "fields": "nextPageToken,files(id,name,mimeType,modifiedTime,webViewLink,description)", **({"pageToken": next_page} if next_page else {})}
-                elif resource == "calendar":
-                    url = "https://www.googleapis.com/calendar/v3/calendars/primary/events"
-                    params = {"maxResults": 2500, "singleEvents": "true", **({"pageToken": next_page} if next_page else {}), **({"syncToken": cursor} if cursor and not next_page else {})}
-                elif resource == "contacts":
-                    url = "https://people.googleapis.com/v1/people/me/connections"
-                    params = {"pageSize": 1000, "personFields": "names,emailAddresses,phoneNumbers,organizations", "requestSyncToken": "true", **({"pageToken": next_page} if next_page else {}), **({"syncToken": cursor} if cursor and not next_page else {})}
-                else:
-                    raise GoogleWorkspaceError(f"Unsupported Google resource: {resource}")
-                response = await client.get(url, params=params, headers={"Authorization": f"Bearer {token}"})
-                if response.status_code == 410 and cursor:
-                    return await self.fetch_resource(token, resource, cursor=None, max_pages=max_pages)
-                if response.status_code >= 400:
-                    raise GoogleWorkspaceError(f"Google {resource} sync failed ({response.status_code})")
-                payload = response.json()
-                key = {"gmail": "messages", "drive": "files", "calendar": "items", "contacts": "connections"}[resource]
-                records.extend(payload.get(key) or [])
-                next_page = payload.get("nextPageToken")
-                final_cursor = payload.get("nextSyncToken") or final_cursor
-                if not next_page:
-                    break
-            if resource == "gmail":
-                profile = await client.get("https://gmail.googleapis.com/gmail/v1/users/me/profile", headers={"Authorization": f"Bearer {token}"})
-                if profile.status_code == 200:
-                    final_cursor = str(profile.json().get("historyId") or final_cursor or "") or None
-            elif resource == "drive" and not final_cursor:
-                start = await client.get("https://www.googleapis.com/drive/v3/changes/startPageToken", headers={"Authorization": f"Bearer {token}"})
-                if start.status_code == 200:
-                    final_cursor = start.json().get("startPageToken")
+        for _ in range(max_pages):
+            if resource == "calendar":
+                url = "https://www.googleapis.com/calendar/v3/calendars/primary/events"
+                params = {"maxResults": 2500, "singleEvents": "true", **({"pageToken": next_page} if next_page else {}), **({"syncToken": cursor} if cursor and not next_page else {})}
+            else:
+                url = "https://people.googleapis.com/v1/people/me/connections"
+                params = {"pageSize": 1000, "personFields": "names,emailAddresses,phoneNumbers,organizations", "requestSyncToken": "true", **({"pageToken": next_page} if next_page else {}), **({"syncToken": cursor} if cursor and not next_page else {})}
+            response = await client.get(url, params=params, headers=headers)
+            if response.status_code == 410 and cursor:
+                return await self.fetch_resource(headers["Authorization"].removeprefix("Bearer "), resource, cursor=None, max_pages=max_pages)
+            self._require_success(response, resource)
+            payload = response.json()
+            records.extend(payload.get("items" if resource == "calendar" else "connections") or [])
+            next_page = payload.get("nextPageToken")
+            final_cursor = payload.get("nextSyncToken") or final_cursor
+            if not next_page:
+                break
         return records, final_cursor
+
+    async def _fetch_gmail(
+        self,
+        client: httpx.AsyncClient,
+        headers: dict[str, str],
+        *,
+        cursor: str | None,
+        max_pages: int,
+    ) -> tuple[list[dict], str | None]:
+        message_ids: list[str] = []
+        next_page: str | None = None
+        final_cursor = cursor
+        for _ in range(max_pages):
+            if cursor:
+                url = "https://gmail.googleapis.com/gmail/v1/users/me/history"
+                params = {
+                    "startHistoryId": cursor,
+                    "historyTypes": "messageAdded",
+                    "maxResults": 100,
+                    **({"pageToken": next_page} if next_page else {}),
+                }
+            else:
+                url = "https://gmail.googleapis.com/gmail/v1/users/me/messages"
+                params = {"maxResults": 100, **({"pageToken": next_page} if next_page else {})}
+            response = await client.get(url, params=params, headers=headers)
+            if response.status_code == 404 and cursor:
+                return await self._fetch_gmail(client, headers, cursor=None, max_pages=max_pages)
+            if response.status_code == 410 and cursor:
+                return await self._fetch_gmail(client, headers, cursor=None, max_pages=max_pages)
+            self._require_success(response, "gmail")
+            payload = response.json()
+            if cursor:
+                final_cursor = str(payload.get("historyId") or final_cursor or "") or None
+                for history in payload.get("history") or []:
+                    for added in history.get("messagesAdded") or []:
+                        message_id = str((added.get("message") or {}).get("id") or "")
+                        if message_id:
+                            message_ids.append(message_id)
+            else:
+                message_ids.extend(str(item.get("id")) for item in payload.get("messages") or [] if item.get("id"))
+            next_page = payload.get("nextPageToken")
+            if not next_page:
+                break
+
+        records = []
+        for message_id in dict.fromkeys(message_ids):
+            records.append(await self._fetch_gmail_message(client, headers, message_id))
+
+        profile = await client.get(
+            "https://gmail.googleapis.com/gmail/v1/users/me/profile",
+            headers=headers,
+        )
+        if profile.status_code == 200:
+            final_cursor = str(profile.json().get("historyId") or final_cursor or "") or None
+        return records, final_cursor
+
+    async def _fetch_gmail_message(
+        self,
+        client: httpx.AsyncClient,
+        headers: dict[str, str],
+        message_id: str,
+    ) -> dict[str, Any]:
+        response = await client.get(
+            f"https://gmail.googleapis.com/gmail/v1/users/me/messages/{message_id}",
+            params={"format": "full"},
+            headers=headers,
+        )
+        self._require_success(response, "gmail")
+        message = response.json()
+        body_text: list[str] = []
+        body_html: list[str] = []
+        attachments: list[dict[str, Any]] = []
+        await self._read_gmail_part(
+            client,
+            headers,
+            message_id=message_id,
+            part=message.get("payload") or {},
+            body_text=body_text,
+            body_html=body_html,
+            attachments=attachments,
+        )
+        header_values = {
+            str(item.get("name") or "").lower(): str(item.get("value") or "")
+            for item in (message.get("payload") or {}).get("headers") or []
+            if item.get("name")
+        }
+        return {
+            "id": message.get("id"),
+            "thread_id": message.get("threadId"),
+            "label_ids": message.get("labelIds") or [],
+            "snippet": message.get("snippet"),
+            "internal_date": message.get("internalDate"),
+            "headers": header_values,
+            "body_text": "\n".join(value for value in body_text if value).strip(),
+            "body_html": "\n".join(value for value in body_html if value).strip(),
+            "attachments": attachments,
+        }
+
+    async def _read_gmail_part(
+        self,
+        client: httpx.AsyncClient,
+        headers: dict[str, str],
+        *,
+        message_id: str,
+        part: dict[str, Any],
+        body_text: list[str],
+        body_html: list[str],
+        attachments: list[dict[str, Any]],
+    ) -> None:
+        filename = str(part.get("filename") or "")
+        mime_type = str(part.get("mimeType") or "application/octet-stream")
+        body = part.get("body") or {}
+        encoded = str(body.get("data") or "")
+        attachment_id = str(body.get("attachmentId") or "")
+        if attachment_id:
+            response = await client.get(
+                f"https://gmail.googleapis.com/gmail/v1/users/me/messages/{message_id}/attachments/{attachment_id}",
+                headers=headers,
+            )
+            self._require_success(response, "gmail attachment")
+            encoded = str(response.json().get("data") or "")
+        content = self._decode_websafe(encoded) if encoded else b""
+        if filename or attachment_id:
+            attachments.append({
+                "attachment_id": attachment_id or None,
+                "filename": filename or f"attachment-{len(attachments) + 1}",
+                "mime_type": mime_type,
+                **self._serialize_content(content, mime_type),
+            })
+        elif content and mime_type == "text/plain":
+            body_text.append(content.decode("utf-8", errors="replace"))
+        elif content and mime_type == "text/html":
+            body_html.append(content.decode("utf-8", errors="replace"))
+        for child in part.get("parts") or []:
+            await self._read_gmail_part(
+                client,
+                headers,
+                message_id=message_id,
+                part=child,
+                body_text=body_text,
+                body_html=body_html,
+                attachments=attachments,
+            )
+
+    async def _fetch_drive(
+        self,
+        client: httpx.AsyncClient,
+        headers: dict[str, str],
+        *,
+        cursor: str | None,
+        max_pages: int,
+    ) -> tuple[list[dict], str | None]:
+        files: list[dict[str, Any]] = []
+        removed: list[dict[str, Any]] = []
+        next_page = cursor if cursor else None
+        final_cursor = cursor
+        for _ in range(max_pages):
+            if cursor:
+                response = await client.get(
+                    "https://www.googleapis.com/drive/v3/changes",
+                    params={
+                        "pageToken": next_page,
+                        "pageSize": 100,
+                        "includeRemoved": "true",
+                        "fields": "nextPageToken,newStartPageToken,changes(fileId,removed,file(id,name,mimeType,modifiedTime,webViewLink,description,size,md5Checksum))",
+                    },
+                    headers=headers,
+                )
+            else:
+                response = await client.get(
+                    "https://www.googleapis.com/drive/v3/files",
+                    params={
+                        "pageSize": 100,
+                        "q": "trashed = false",
+                        "fields": "nextPageToken,files(id,name,mimeType,modifiedTime,webViewLink,description,size,md5Checksum)",
+                        **({"pageToken": next_page} if next_page else {}),
+                    },
+                    headers=headers,
+                )
+            if response.status_code == 410 and cursor:
+                return await self._fetch_drive(client, headers, cursor=None, max_pages=max_pages)
+            self._require_success(response, "drive")
+            payload = response.json()
+            if cursor:
+                for change in payload.get("changes") or []:
+                    if change.get("removed"):
+                        removed.append({"id": change.get("fileId"), "removed": True})
+                    elif change.get("file"):
+                        files.append(change["file"])
+                final_cursor = payload.get("newStartPageToken") or final_cursor
+            else:
+                files.extend(payload.get("files") or [])
+            next_page = payload.get("nextPageToken")
+            if not next_page:
+                break
+
+        records = [await self._fetch_drive_file_content(client, headers, file) for file in files]
+        records.extend(removed)
+        if not cursor:
+            start = await client.get(
+                "https://www.googleapis.com/drive/v3/changes/startPageToken",
+                headers=headers,
+            )
+            if start.status_code == 200:
+                final_cursor = start.json().get("startPageToken")
+        return records, final_cursor
+
+    async def _fetch_drive_file_content(
+        self,
+        client: httpx.AsyncClient,
+        headers: dict[str, str],
+        file: dict[str, Any],
+    ) -> dict[str, Any]:
+        record = dict(file)
+        file_id = str(file.get("id") or "")
+        mime_type = str(file.get("mimeType") or "application/octet-stream")
+        if not file_id or mime_type in DRIVE_METADATA_ONLY_MIME_TYPES:
+            record["content_status"] = "metadata_only"
+            return record
+        export_type = DRIVE_EXPORT_MIME_TYPES.get(mime_type)
+        if mime_type.startswith("application/vnd.google-apps.") and not export_type:
+            record["content_status"] = "unsupported_google_type"
+            return record
+        if export_type:
+            url = f"https://www.googleapis.com/drive/v3/files/{file_id}/export"
+            params = {"mimeType": export_type}
+            content_type = export_type
+        else:
+            url = f"https://www.googleapis.com/drive/v3/files/{file_id}"
+            params = {"alt": "media"}
+            content_type = mime_type
+        response = await client.get(url, params=params, headers=headers)
+        if response.status_code in {403, 404}:
+            record.update({"content_status": "unavailable", "content_error_status": response.status_code})
+            return record
+        self._require_success(response, "drive content")
+        if len(response.content) > MAX_SYNC_CONTENT_BYTES:
+            record.update({
+                "content_status": "skipped_too_large",
+                "content_size": len(response.content),
+                "content_limit": MAX_SYNC_CONTENT_BYTES,
+            })
+            return record
+        record.update({"content_status": "synced", "content_mime_type": content_type})
+        record.update(self._serialize_content(response.content, content_type))
+        return record
+
+    @staticmethod
+    def _require_success(response: httpx.Response, resource: str) -> None:
+        if response.status_code >= 400:
+            raise GoogleWorkspaceError(f"Google {resource} sync failed ({response.status_code})")
+
+    @staticmethod
+    def _decode_websafe(value: str) -> bytes:
+        padded = value + "=" * (-len(value) % 4)
+        return base64.urlsafe_b64decode(padded.encode("ascii"))
+
+    @staticmethod
+    def _serialize_content(content: bytes, mime_type: str) -> dict[str, Any]:
+        result: dict[str, Any] = {"content_size": len(content)}
+        textual = mime_type.startswith("text/") or mime_type in {
+            "application/json",
+            "application/xml",
+            "application/csv",
+        }
+        if textual:
+            result.update({"content_text": content.decode("utf-8", errors="replace"), "content_encoding": "utf-8"})
+        else:
+            result.update({"content_base64": base64.b64encode(content).decode("ascii"), "content_encoding": "base64"})
+        return result
 
     async def _token_request(self, data: dict[str, str]) -> dict[str, Any]:
         async with httpx.AsyncClient(timeout=30) as client:

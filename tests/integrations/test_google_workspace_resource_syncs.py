@@ -211,10 +211,18 @@ async def test_all_four_google_provider_adapters_fetch_their_own_resource(monkey
         path = request.url.path
         if path.endswith("/messages"):
             return httpx.Response(200, json={"messages": [{"id": "message-1"}]})
+        if path.endswith("/messages/message-1"):
+            return httpx.Response(200, json={
+                "id": "message-1",
+                "threadId": "thread-1",
+                "payload": {"mimeType": "text/plain", "body": {"data": "SGVsbG8gZnJvbSBHbWFpbA=="}},
+            })
         if path.endswith("/profile"):
             return httpx.Response(200, json={"historyId": "history-11"})
         if path.endswith("/files"):
-            return httpx.Response(200, json={"files": [{"id": "file-1"}]})
+            return httpx.Response(200, json={"files": [{"id": "file-1", "mimeType": "text/plain"}]})
+        if path.endswith("/files/file-1"):
+            return httpx.Response(200, content=b"Drive file content", headers={"content-type": "text/plain"})
         if path.endswith("/changes/startPageToken"):
             return httpx.Response(200, json={"startPageToken": "drive-page-11"})
         if path.endswith("/events"):
@@ -235,5 +243,151 @@ async def test_all_four_google_provider_adapters_fetch_their_own_resource(monkey
         resource,
     )
 
-    assert records == [{"id": expected_id}]
+    assert records[0]["id"] == expected_id
+    if resource == "gmail":
+        assert records[0]["body_text"] == "Hello from Gmail"
+    if resource == "drive":
+        assert records[0]["content_text"] == "Drive file content"
+        assert records[0]["content_status"] == "synced"
     assert cursor == expected_cursor
+
+
+@pytest.mark.asyncio
+async def test_gmail_sync_fetches_full_body_and_attachment_content(monkeypatch):
+    def handler(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        if path.endswith("/messages"):
+            return httpx.Response(200, json={"messages": [{"id": "message-1"}]})
+        if path.endswith("/messages/message-1"):
+            return httpx.Response(200, json={
+                "id": "message-1",
+                "threadId": "thread-1",
+                "labelIds": ["INBOX"],
+                "payload": {
+                    "mimeType": "multipart/mixed",
+                    "headers": [{"name": "Subject", "value": "A complete message"}],
+                    "parts": [
+                        {"mimeType": "text/plain", "body": {"data": "SGVsbG8gZnJvbSB0aGUgYm9keQ=="}},
+                        {
+                            "filename": "notes.txt",
+                            "mimeType": "text/plain",
+                            "body": {"attachmentId": "attachment-1", "size": 15},
+                        },
+                    ],
+                },
+            })
+        if path.endswith("/attachments/attachment-1"):
+            return httpx.Response(200, json={"data": "QXR0YWNobWVudCB0ZXh0"})
+        if path.endswith("/profile"):
+            return httpx.Response(200, json={"historyId": "history-12"})
+        raise AssertionError(f"Unexpected Google request: {request.url}")
+
+    original_client = httpx.AsyncClient
+    monkeypatch.setattr(
+        google_service.httpx,
+        "AsyncClient",
+        lambda **_kwargs: original_client(transport=httpx.MockTransport(handler)),
+    )
+
+    records, cursor = await google_service.GoogleWorkspaceOAuthService().fetch_resource("token", "gmail")
+
+    assert cursor == "history-12"
+    assert records[0]["body_text"] == "Hello from the body"
+    assert records[0]["headers"]["subject"] == "A complete message"
+    assert records[0]["attachments"] == [{
+        "attachment_id": "attachment-1",
+        "filename": "notes.txt",
+        "mime_type": "text/plain",
+        "content_size": 15,
+        "content_text": "Attachment text",
+        "content_encoding": "utf-8",
+    }]
+
+
+@pytest.mark.asyncio
+async def test_gmail_incremental_sync_uses_history_cursor(monkeypatch):
+    requested_history_ids = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        if path.endswith("/history"):
+            requested_history_ids.append(request.url.params.get("startHistoryId"))
+            return httpx.Response(200, json={
+                "historyId": "history-21",
+                "history": [{"messagesAdded": [{"message": {"id": "message-2"}}]}],
+            })
+        if path.endswith("/messages/message-2"):
+            return httpx.Response(200, json={"id": "message-2", "payload": {"mimeType": "text/plain", "body": {"data": "SW5jcmVtZW50YWw="}}})
+        if path.endswith("/profile"):
+            return httpx.Response(200, json={"historyId": "history-22"})
+        raise AssertionError(f"Unexpected Google request: {request.url}")
+
+    original_client = httpx.AsyncClient
+    monkeypatch.setattr(google_service.httpx, "AsyncClient", lambda **_kwargs: original_client(transport=httpx.MockTransport(handler)))
+
+    records, cursor = await google_service.GoogleWorkspaceOAuthService().fetch_resource("token", "gmail", cursor="history-20")
+
+    assert requested_history_ids == ["history-20"]
+    assert records[0]["body_text"] == "Incremental"
+    assert cursor == "history-22"
+
+
+@pytest.mark.asyncio
+async def test_drive_sync_downloads_binary_and_exports_native_file_content(monkeypatch):
+    def handler(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        if path.endswith("/files"):
+            return httpx.Response(200, json={"files": [
+                {"id": "text-1", "name": "notes.txt", "mimeType": "text/plain"},
+                {"id": "doc-1", "name": "brief", "mimeType": "application/vnd.google-apps.document"},
+                {"id": "pdf-1", "name": "terms.pdf", "mimeType": "application/pdf"},
+            ]})
+        if path.endswith("/files/text-1"):
+            assert request.url.params.get("alt") == "media"
+            return httpx.Response(200, content=b"plain drive text")
+        if path.endswith("/files/doc-1/export"):
+            assert request.url.params.get("mimeType") == "text/plain"
+            return httpx.Response(200, content=b"exported document")
+        if path.endswith("/files/pdf-1"):
+            return httpx.Response(200, content=b"%PDF-synchronized")
+        if path.endswith("/changes/startPageToken"):
+            return httpx.Response(200, json={"startPageToken": "drive-page-31"})
+        raise AssertionError(f"Unexpected Google request: {request.url}")
+
+    original_client = httpx.AsyncClient
+    monkeypatch.setattr(google_service.httpx, "AsyncClient", lambda **_kwargs: original_client(transport=httpx.MockTransport(handler)))
+
+    records, cursor = await google_service.GoogleWorkspaceOAuthService().fetch_resource("token", "drive")
+
+    by_id = {record["id"]: record for record in records}
+    assert by_id["text-1"]["content_text"] == "plain drive text"
+    assert by_id["doc-1"]["content_text"] == "exported document"
+    assert by_id["pdf-1"]["content_base64"] == "JVBERi1zeW5jaHJvbml6ZWQ="
+    assert cursor == "drive-page-31"
+
+
+@pytest.mark.asyncio
+async def test_drive_incremental_sync_uses_changes_cursor(monkeypatch):
+    def handler(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        if path.endswith("/changes"):
+            assert request.url.params.get("pageToken") == "drive-page-40"
+            return httpx.Response(200, json={
+                "newStartPageToken": "drive-page-41",
+                "changes": [
+                    {"fileId": "text-2", "file": {"id": "text-2", "mimeType": "text/plain"}},
+                    {"fileId": "deleted-1", "removed": True},
+                ],
+            })
+        if path.endswith("/files/text-2"):
+            return httpx.Response(200, content=b"changed content")
+        raise AssertionError(f"Unexpected Google request: {request.url}")
+
+    original_client = httpx.AsyncClient
+    monkeypatch.setattr(google_service.httpx, "AsyncClient", lambda **_kwargs: original_client(transport=httpx.MockTransport(handler)))
+
+    records, cursor = await google_service.GoogleWorkspaceOAuthService().fetch_resource("token", "drive", cursor="drive-page-40")
+
+    assert records[0]["content_text"] == "changed content"
+    assert records[1] == {"id": "deleted-1", "removed": True}
+    assert cursor == "drive-page-41"
