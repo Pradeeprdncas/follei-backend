@@ -4,7 +4,7 @@ from __future__ import annotations
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel, Field, HttpUrl
+from pydantic import AliasChoices, BaseModel, Field, HttpUrl
 from sqlalchemy.orm import Session
 
 from app.config.database import get_db
@@ -28,7 +28,10 @@ class WebsiteIngestRequest(BaseModel):
     max_pages: int = Field(default=10, ge=1, le=25)
     category: str | None = None
     engine: str = Field(default="auto", pattern="^(auto|aiohttp|crawl4ai|scrapy)$")
-    confirm_authorized: bool
+    crawl_consent: bool = Field(
+        validation_alias=AliasChoices("crawl_consent", "confirm_authorized"),
+        description="Consent to crawl public pages. This is not proof of website ownership.",
+    )
 
 
 @router.get("/engines")
@@ -42,8 +45,8 @@ def ingest_website(
     db: Session = Depends(get_db),
     tenant_id: str = Depends(get_authenticated_tenant_id),
 ):
-    if not payload.confirm_authorized:
-        raise HTTPException(status_code=422, detail="Website ownership or crawl authorization must be confirmed")
+    if not payload.crawl_consent:
+        raise HTTPException(status_code=422, detail="Crawl consent must be confirmed")
     try:
         validate_public_url(str(payload.url))
         category = normalize_category(payload.category) if payload.category else None
@@ -61,7 +64,8 @@ def ingest_website(
         config={
             "url": str(payload.url), "max_pages": payload.max_pages,
             "engine": payload.engine, "category": category,
-            "authorization_confirmed": True,
+            "crawl_consent": True,
+            "ownership_verification": "unverified",
         },
     )
     run = IngestionRun(id=uuid4(), tenant_id=tenant_uuid, source_id=source.id, status="queued")
@@ -94,7 +98,10 @@ def ingest_website(
 
     return api_envelope(
         {
-            "source": {"id": str(source.id), "type": "website", "status": source.status},
+            "source": {
+                "id": str(source.id), "type": "website", "status": source.status,
+                "crawl_consent": True, "ownership_verification": "unverified",
+            },
             "run": {"id": str(run.id), "status": run.status},
             "jobs": [{"id": str(job.id), "type": job.job_type, "status": job.status}],
             "status_url": f"/api/v1/onboarding/state",
