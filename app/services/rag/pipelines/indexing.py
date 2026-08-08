@@ -19,6 +19,7 @@ from app.services.rag.document_identity import reserve_document
 from app.services.rag.metadata.summarizer import summarize_text
 from app.services.rag.metadata.keywords import extract_keywords
 from app.services.rag.embeddings.mistral import embed_texts
+from app.services.knowledge.embedding_service import embedding_model_name
 from app.services.rag.embeddings.duplicate import mark_embedded
 from app.services.rag.vectorstore.qdrant import ensure_collection
 from app.services.rag.vectorstore.insert import insert_chunks
@@ -208,6 +209,7 @@ async def index_document(file_path: str, tenant_id: str, *, source_uri: str | No
                 token_count=chunk_data.get("token_count"),
                 metadata_={
                     "source_id": str(knowledge_source.id),
+                    "embedding_model": embedding_model_name(),
                     "heading_path": list(chunk_data.get("heading_path") or []),
                     "chunk_type": chunk_data.get("chunk_type"),
                     "chunking_strategy": routed.strategy,
@@ -228,6 +230,7 @@ async def index_document(file_path: str, tenant_id: str, *, source_uri: str | No
                     "prev_chunk_id": chunk.prev_chunk_id, "next_chunk_id": chunk.next_chunk_id,
                     "section_path": chunk.section_path, "heading_path": chunk.section_path or [],
                     "source_id": str(knowledge_source.id),
+                    "embedding_model": embedding_model_name(),
                     "word_count": chunk.word_count, "tags": chunk.tags, "category": category, "primary_category": category, "detected_category": chunk.detected_category, "section_id": str(chunk.section_id) if chunk.section_id else None, "document_version_id": str(chunk.document_version_id) if chunk.document_version_id else None,
                     "approval_status": "draft", "sensitivity": doc.sensitivity, "source_type": source_type,
                     "lead_ids": list((doc.metadata_ or {}).get("lead_ids") or []),

@@ -19,6 +19,7 @@ from app.api.campaigns import router as campaigns_router
 from app.routers.crm_sync import router as crm_sync_router
 from app.routers.onboarding_state import router as onboarding_state_router
 from app.routers.google_workspace import router as google_workspace_router
+from app.routers.knowledge_query import router as knowledge_query_router
 from app.services.rag.vectorstore.qdrant import ensure_collection
 from app.config.kafka import ensure_topics
 from loguru import logger
@@ -61,7 +62,7 @@ def create_app() -> FastAPI:
         allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
         allow_headers=["Authorization", "Content-Type", "X-Webhook-Secret"],
     )
-    for router in (upload_router, chat_router, health_router, knowledge_review_router, orchestrator_router, conversation_memory_router, onboarding_router, onboarding_state_router, google_workspace_router, channels_email_router, website_ingestion_router, websocket_router, voice_test_router, verification_ui_router, email_connections_router, channel_connections_router, flows_router, assets_router, crm_sync_router):
+    for router in (upload_router, chat_router, health_router, knowledge_review_router, orchestrator_router, conversation_memory_router, onboarding_router, onboarding_state_router, google_workspace_router, knowledge_query_router, channels_email_router, website_ingestion_router, websocket_router, voice_test_router, verification_ui_router, email_connections_router, channel_connections_router, flows_router, assets_router, crm_sync_router):
         app.include_router(router)
     app.include_router(campaigns_router, prefix="/api/v1")
 

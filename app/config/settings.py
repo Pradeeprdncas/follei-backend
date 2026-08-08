@@ -40,6 +40,8 @@ class Settings(BaseSettings):
     MISTRAL_EMBEDDING_MODEL: str = "mistral-embed"
     MISTRAL_CHAT_MODEL: str = "mistral-medium-2508"
     MISTRAL_API_BASE: str = "https://api.mistral.ai/v1"
+    MISTRAL_REQUEST_TIMEOUT_SECONDS: float = 60.0
+    MISTRAL_EMBEDDING_BATCH_SIZE: int = 32
     AI_MODELS: str = Field(default="AI_MODELS", description="Canonical local AI model root")
     # Local response generation. llama.cpp exposes an OpenAI-compatible API,
     # keeping model runtime concerns outside the FastAPI worker process.
@@ -69,6 +71,7 @@ class Settings(BaseSettings):
     CHUNK_SIZE: int = 512
     CHUNK_OVERLAP: int = 50
     TOP_K_RETRIEVAL: int = 20
+    KNOWLEDGE_QUERY_TOP_K: int = 8
     TOP_K_RERANK: int = 5
     RRF_K: int = 60
     MIN_CONFIDENCE: float = 0.5
