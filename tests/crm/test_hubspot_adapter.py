@@ -3,8 +3,26 @@ import pytest
 import uuid
 
 from app.models.knowledge.sync_event import KnowledgeSyncEvent
-from app.services.crm.hubspot import HubSpotClient, HubSpotError, normalize_hubspot_record
+from app.services.crm.hubspot import HUBSPOT_RESOURCE_COVERAGE, HubSpotClient, HubSpotError, normalize_hubspot_record
 from app.services.knowledge.outbox import _deliveries, deliver_event
+
+
+def test_hubspot_resource_coverage_is_explicit_and_matches_the_adapter():
+    assert HUBSPOT_RESOURCE_COVERAGE == {
+        "contacts": {"status": "implemented", "object_type": "contact"},
+        "companies": {"status": "implemented", "object_type": "company"},
+        "deals": {"status": "implemented", "object_type": "deal"},
+        "owners": {"status": "pending", "object_type": None},
+        "pipelines": {"status": "pending", "object_type": None},
+        "associations": {"status": "pending", "object_type": None},
+        "property_schemas": {"status": "pending", "object_type": None},
+        "engagements": {"status": "pending", "object_type": None},
+    }
+    assert set(HubSpotClient.PATHS) == {
+        details["object_type"]
+        for details in HUBSPOT_RESOURCE_COVERAGE.values()
+        if details["status"] == "implemented"
+    }
 
 
 @pytest.mark.asyncio

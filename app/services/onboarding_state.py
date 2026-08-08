@@ -36,6 +36,34 @@ def _category_rows(db: Session, tenant_id: uuid.UUID) -> list[dict[str, object]]
     ]
 
 
+def evaluate_readiness(
+    categories: list[dict[str, object]],
+    confirmation_map: dict[str, object],
+    profile_missing: list[str],
+) -> dict[str, object]:
+    """Evaluate mandatory groups; one populated member satisfies each group."""
+    found_by_mandatory_group: dict[str, list[str]] = defaultdict(list)
+    for category in categories:
+        mandatory_group = category.get("mandatory_group")
+        if mandatory_group and category.get("status") in {"found", "partial"} and int(category.get("count") or 0) > 0:
+            found_by_mandatory_group[str(mandatory_group)].append(str(category["key"]))
+
+    missing_groups = [key for key in MANDATORY_GROUPS if not found_by_mandatory_group[key]]
+    confirmations_needed = [key for key in missing_groups if key not in confirmation_map]
+    unsafe_confirmations = {
+        key for key, row in confirmation_map.items()
+        if getattr(row, "resolution", None) == "continue_without"
+    }
+    can_continue = not profile_missing and not confirmations_needed
+    return {
+        "found_by_mandatory_group": dict(found_by_mandatory_group),
+        "missing_groups": missing_groups,
+        "confirmations_needed": confirmations_needed,
+        "can_continue": can_continue,
+        "ready_for_autonomous_actions": can_continue and not missing_groups and not unsafe_confirmations,
+    }
+
+
 def build_onboarding_state(db: Session, tenant_id: uuid.UUID) -> dict[str, object]:
     profile = db.query(OnboardingProfile).filter(OnboardingProfile.tenant_id == tenant_id).first()
     sources = db.query(KnowledgeSource).filter(KnowledgeSource.tenant_id == tenant_id).order_by(KnowledgeSource.created_at).all()
@@ -44,17 +72,6 @@ def build_onboarding_state(db: Session, tenant_id: uuid.UUID) -> dict[str, objec
     confirmations = db.query(OnboardingConfirmation).filter(OnboardingConfirmation.tenant_id == tenant_id).all()
     confirmation_map = {row.requirement_key: row for row in confirmations}
 
-    found_by_mandatory_group: dict[str, list[str]] = defaultdict(list)
-    for category in categories:
-        if category["mandatory_group"] and category["status"] in {"found", "partial"} and int(category["count"]) > 0:
-            found_by_mandatory_group[str(category["mandatory_group"])].append(str(category["key"]))
-
-    missing_groups = [key for key in MANDATORY_GROUPS if not found_by_mandatory_group[key]]
-    confirmations_needed = [key for key in missing_groups if key not in confirmation_map]
-    important_missing = [
-        {"requirement": key, "acceptable_categories": list(MANDATORY_GROUPS[key])}
-        for key in missing_groups
-    ]
     optional_missing = [
         category["key"] for category in categories
         if category["mandatory_group"] is None and category["status"] == "missing"
@@ -66,11 +83,13 @@ def build_onboarding_state(db: Session, tenant_id: uuid.UUID) -> dict[str, objec
     else:
         profile_missing = [field for field in ("company_name", "timezone", "industry") if not getattr(profile, field, None)]
 
-    can_continue = not profile_missing and not confirmations_needed
-    unsafe_confirmations = {
-        key for key, row in confirmation_map.items() if row.resolution == "continue_without"
-    }
-    ready_for_autonomous_actions = can_continue and not missing_groups and not unsafe_confirmations
+    readiness = evaluate_readiness(categories, confirmation_map, profile_missing)
+    missing_groups = list(readiness["missing_groups"])
+    confirmations_needed = list(readiness["confirmations_needed"])
+    important_missing = [
+        {"requirement": key, "acceptable_categories": list(MANDATORY_GROUPS[key])}
+        for key in missing_groups
+    ]
 
     return {
         "step": "knowledge_review",
@@ -107,6 +126,6 @@ def build_onboarding_state(db: Session, tenant_id: uuid.UUID) -> dict[str, objec
             }
             for row in confirmations
         ],
-        "can_continue": can_continue,
-        "ready_for_autonomous_actions": ready_for_autonomous_actions,
+        "can_continue": readiness["can_continue"],
+        "ready_for_autonomous_actions": readiness["ready_for_autonomous_actions"],
     }

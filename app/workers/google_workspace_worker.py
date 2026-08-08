@@ -13,13 +13,14 @@ from app.config.settings import get_settings
 from app.models.integrations.oauth_connection import GoogleWorkspaceConnection
 from app.models.knowledge.indexing_job import IndexingJob
 from app.models.knowledge.ingestion import IngestionRun, SourceIngestionJob
-from app.routers.upload import UPLOAD_DIR
 from app.services.integrations.google_workspace import GoogleWorkspaceOAuthService
 from app.services.knowledge.object_storage import store_source
 from app.services.knowledge.ingestion_retry import IngestionJobFailed, publish_ingestion_retry, record_ingestion_failure
 
 
 _settings = get_settings()
+UPLOAD_DIR = Path("uploads")
+UPLOAD_DIR.mkdir(exist_ok=True)
 RESOURCE_CATEGORY = {"gmail": "communication_preferences", "drive": "general", "calendar": "follow_up_patterns", "contacts": "contact_company_information"}
 
 

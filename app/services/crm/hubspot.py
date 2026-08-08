@@ -8,6 +8,18 @@ from typing import Any
 import httpx
 
 
+HUBSPOT_RESOURCE_COVERAGE = {
+    "contacts": {"status": "implemented", "object_type": "contact"},
+    "companies": {"status": "implemented", "object_type": "company"},
+    "deals": {"status": "implemented", "object_type": "deal"},
+    "owners": {"status": "pending", "object_type": None},
+    "pipelines": {"status": "pending", "object_type": None},
+    "associations": {"status": "pending", "object_type": None},
+    "property_schemas": {"status": "pending", "object_type": None},
+    "engagements": {"status": "pending", "object_type": None},
+}
+
+
 class HubSpotError(RuntimeError):
     def __init__(self, message: str, *, status_code: int | None = None):
         super().__init__(message)
@@ -113,4 +125,3 @@ def normalize_hubspot_record(object_type: str, payload: dict[str, Any]) -> dict[
             amount = None
         return {**base, "title": properties.get("dealname"), "amount": amount, "stage": properties.get("dealstage"), "pipeline": properties.get("pipeline"), "close_date": properties.get("closedate"), "owner_id": properties.get("hubspot_owner_id")}
     raise ValueError(f"Unsupported HubSpot object type: {object_type}")
-
