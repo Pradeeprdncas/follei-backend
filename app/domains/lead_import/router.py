@@ -314,7 +314,10 @@ async def import_leads(
 # ── POST /leads/import/preview — dry run ─────────────────────────
 
 @router.post("/preview", response_model=PreviewResult)
-async def preview_import(file: UploadFile = File(...)):
+async def preview_import(
+    file: UploadFile = File(...),
+    authenticated_tenant_id: str = Depends(get_authenticated_tenant_id),
+):
     """Preview CSV import — parse and show rows with validation errors, no DB writes."""
     if not file.filename:
         raise HTTPException(status_code=400, detail="No file provided")
