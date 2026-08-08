@@ -6,6 +6,7 @@ from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import HTMLResponse
+from loguru import logger
 from sqlalchemy.orm import Session
 
 from app.config.database import get_db
@@ -60,9 +61,11 @@ async def hubspot_oauth_callback(state: str = Query(...), code: str = Query(...)
         run, _, _ = _queue_hubspot_sync(db, connection, ["contact", "company", "deal"])
         result = {"type": "follei:integration-connected", "provider": "hubspot", "connection_id": str(connection.id), "run_id": str(run.id)}
     except Exception as exc:
-        result = {"type": "follei:integration-error", "provider": "hubspot", "message": str(exc)}
+        logger.warning("HubSpot OAuth callback failed: {}", type(exc).__name__)
+        result = {"type": "follei:integration-error", "provider": "hubspot", "message": "Connection could not be completed"}
     encoded = json.dumps(result).replace("<", "\\u003c")
-    return HTMLResponse(f"<!doctype html><title>Follei HubSpot</title><p>You may close this window.</p><script>const result={encoded};if(window.opener)window.opener.postMessage(result,window.location.origin);</script>")
+    target_origin = json.dumps(_settings.FRONTEND_BASE_URL.rstrip("/"))
+    return HTMLResponse(f"<!doctype html><title>Follei HubSpot</title><p>You may close this window.</p><script>const result={encoded};if(window.opener)window.opener.postMessage(result,{target_origin});</script>")
 
 
 def _connection_payload(row: TenantCRMConnection) -> CRMConnectionResponse:

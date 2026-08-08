@@ -6,6 +6,7 @@ from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import HTMLResponse
+from loguru import logger
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
@@ -82,9 +83,11 @@ async def oauth_callback(state: str = Query(...), code: str = Query(...), db: Se
         producer.flush()
         payload = {"type": "follei:integration-connected", "provider": "google_workspace", "connection_id": str(connection.id), "run_id": str(run.id)}
     except Exception as exc:
-        payload = {"type": "follei:integration-error", "provider": "google_workspace", "message": str(exc)}
+        logger.warning("Google Workspace OAuth callback failed: {}", type(exc).__name__)
+        payload = {"type": "follei:integration-error", "provider": "google_workspace", "message": "Connection could not be completed"}
     encoded = json.dumps(payload).replace("<", "\\u003c")
-    return HTMLResponse(f"<!doctype html><title>Follei Google Workspace</title><p>You may close this window.</p><script>const result={encoded};if(window.opener)window.opener.postMessage(result,window.location.origin);</script>")
+    target_origin = json.dumps(_settings.FRONTEND_BASE_URL.rstrip("/"))
+    return HTMLResponse(f"<!doctype html><title>Follei Google Workspace</title><p>You may close this window.</p><script>const result={encoded};if(window.opener)window.opener.postMessage(result,{target_origin});</script>")
 
 
 @router.get("/connections")
