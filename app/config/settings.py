@@ -63,6 +63,7 @@ class Settings(BaseSettings):
     KAFKA_TOPIC_CRM_SYNC: str = "crm-sync"
     KAFKA_CONSUMER_GROUP: str = "follei-rag-group"
     KAFKA_INDEXING_MAX_ATTEMPTS: int = 3
+    KAFKA_INGESTION_MAX_ATTEMPTS: int = 3
 
     # Ã¢â€â‚¬Ã¢â€â‚¬ RAG Pipeline Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
     CHUNK_SIZE: int = 512

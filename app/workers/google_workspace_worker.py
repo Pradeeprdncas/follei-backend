@@ -16,6 +16,7 @@ from app.models.knowledge.ingestion import IngestionRun, SourceIngestionJob
 from app.routers.upload import UPLOAD_DIR
 from app.services.integrations.google_workspace import GoogleWorkspaceOAuthService
 from app.services.knowledge.object_storage import store_source
+from app.services.knowledge.ingestion_retry import IngestionJobFailed, publish_ingestion_retry, record_ingestion_failure
 
 
 _settings = get_settings()
@@ -60,14 +61,17 @@ async def process_google_job(data: dict) -> None:
         job.payload = {**(job.payload or {}), "record_count": len(records), "indexing_job_id": str(index_id)}
         completed = db.query(SourceIngestionJob).filter(SourceIngestionJob.run_id == run.id, SourceIngestionJob.id != job.id, SourceIngestionJob.status != "completed").first() is None
         run.status = "processing" if completed else "running"
-        run.document_count = sum(item.status == "completed" for item in db.query(SourceIngestionJob).filter(SourceIngestionJob.run_id == run.id).all()) + 1
+        run.document_count = sum(item.status == "completed" for item in db.query(SourceIngestionJob).filter(SourceIngestionJob.run_id == run.id).all())
         db.commit()
     except Exception as exc:
-        job.status = "failed"; job.last_error = str(exc)[:4000]
-        run.status = "partial"; run.error = str(exc)[:4000]
-        connection.last_error = str(exc)[:4000]
+        failure = record_ingestion_failure(
+            job, run, exc,
+            max_attempts=_settings.KAFKA_INGESTION_MAX_ATTEMPTS,
+            terminal_run_status="partial",
+        )
+        connection.last_error = failure.error
         db.commit()
-        raise
+        raise IngestionJobFailed(failure) from exc
     finally:
         db.close()
 
@@ -80,6 +84,8 @@ class GoogleWorkspaceWorker:
             for message in consumer:
                 try:
                     asyncio.run(process_google_job(message.value))
+                except IngestionJobFailed as exc:
+                    publish_ingestion_retry(get_producer(), _settings.KAFKA_TOPIC_GOOGLE_WORKSPACE_SYNC, message.value, exc.failure)
                 finally:
                     consumer.commit()
         finally:

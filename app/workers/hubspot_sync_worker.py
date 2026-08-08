@@ -6,13 +6,14 @@ from datetime import datetime
 from uuid import UUID
 
 from app.config.database import SessionLocal
-from app.config.kafka import ensure_topics, get_consumer
+from app.config.kafka import ensure_topics, get_consumer, get_producer
 from app.config.settings import get_settings
 from app.models.crm import CRMSyncRun, TenantCRMConnection
 from app.models.knowledge.document import KnowledgeSource
 from app.models.knowledge.ingestion import IngestionRun, SourceIngestionJob
 from app.services.crm.sync import sync_hubspot
 from app.services.integrations.hubspot_oauth import HubSpotOAuthService
+from app.services.knowledge.ingestion_retry import IngestionJobFailed, publish_ingestion_retry, record_ingestion_failure
 
 
 _settings = get_settings()
@@ -36,9 +37,15 @@ async def process_hubspot_job(data: dict) -> None:
         ingestion_job.status = "completed"; ingestion_run.status = "completed"; source.status = "active"
         ingestion_run.document_count = sum((crm_run.object_counts or {}).values()); ingestion_run.completed_at = datetime.utcnow(); db.commit()
     except Exception as exc:
-        ingestion_job.status = ingestion_run.status = source.status = "failed"
-        ingestion_job.last_error = ingestion_run.error = str(exc)[:4000]
-        ingestion_run.completed_at = datetime.utcnow(); db.commit(); raise
+        failure = record_ingestion_failure(
+            ingestion_job, ingestion_run, exc,
+            max_attempts=_settings.KAFKA_INGESTION_MAX_ATTEMPTS,
+        )
+        source.status = "retrying" if failure.retryable else "failed"
+        if not failure.retryable:
+            ingestion_run.completed_at = datetime.utcnow()
+        db.commit()
+        raise IngestionJobFailed(failure) from exc
     finally:
         db.close()
 
@@ -48,7 +55,10 @@ class HubSpotSyncWorker:
         ensure_topics(); consumer = get_consumer(_settings.KAFKA_TOPIC_CRM_SYNC, "follei-hubspot-sync")
         try:
             for message in consumer:
-                try: asyncio.run(process_hubspot_job(message.value))
+                try:
+                    asyncio.run(process_hubspot_job(message.value))
+                except IngestionJobFailed as exc:
+                    publish_ingestion_retry(get_producer(), _settings.KAFKA_TOPIC_CRM_SYNC, message.value, exc.failure)
                 finally: consumer.commit()
         finally: consumer.close()
 

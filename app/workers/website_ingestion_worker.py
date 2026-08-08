@@ -17,6 +17,7 @@ from app.models.knowledge.indexing_job import IndexingJob
 from app.models.knowledge.ingestion import IngestionRun, SourceIngestionJob
 from app.routers.upload import UPLOAD_DIR
 from app.services.knowledge.crawlers import crawl_with_adapter
+from app.services.knowledge.ingestion_retry import IngestionJobFailed, publish_ingestion_retry, record_ingestion_failure
 from app.services.knowledge.object_storage import store_source
 
 
@@ -86,12 +87,12 @@ def process_website_job(data: dict) -> None:
         run.document_count = len(indexed_jobs)
         db.commit()
     except Exception as exc:
-        job.status = run.status = source.status = "failed"
-        job.last_error = str(exc)[:4000]
-        run.error = str(exc)[:4000]
-        run.completed_at = datetime.utcnow()
+        failure = record_ingestion_failure(job, run, exc, max_attempts=_settings.KAFKA_INGESTION_MAX_ATTEMPTS)
+        source.status = "retrying" if failure.retryable else "failed"
+        if not failure.retryable:
+            run.completed_at = datetime.utcnow()
         db.commit()
-        raise
+        raise IngestionJobFailed(failure) from exc
     finally:
         db.close()
 
@@ -115,8 +116,12 @@ class WebsiteIngestionWorker:
                 try:
                     process_website_job(message.value)
                     consumer.commit()
-                except Exception as exc:
+                except IngestionJobFailed as exc:
                     logger.exception("Website ingestion failed: {}", exc)
+                    publish_ingestion_retry(get_producer(), _settings.KAFKA_TOPIC_WEBSITE_INGESTION, message.value, exc.failure)
+                    consumer.commit()
+                except Exception as exc:
+                    logger.exception("Website ingestion worker rejected a message: {}", exc)
                     consumer.commit()
         finally:
             consumer.close()
