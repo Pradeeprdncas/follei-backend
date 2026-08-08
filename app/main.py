@@ -22,9 +22,11 @@ from app.routers.google_workspace import router as google_workspace_router
 from app.services.rag.vectorstore.qdrant import ensure_collection
 from app.config.kafka import ensure_topics
 from loguru import logger
+from app.config.settings import get_settings
 
 
 def create_app() -> FastAPI:
+    settings = get_settings()
     app = FastAPI(
         title="Follei Backend",
         description="Enterprise RAG and business workforce API",
@@ -51,7 +53,14 @@ def create_app() -> FastAPI:
     async def swagger_ui_redirect():
         return get_swagger_ui_oauth2_redirect_html()
 
-    app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=False, allow_methods=["*"], allow_headers=["*"])
+    allowed_origins = [value.strip() for value in settings.CORS_ALLOWED_ORIGINS.split(",") if value.strip()]
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=allowed_origins,
+        allow_credentials=False,
+        allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+        allow_headers=["Authorization", "Content-Type", "X-Webhook-Secret"],
+    )
     for router in (upload_router, chat_router, health_router, knowledge_review_router, orchestrator_router, conversation_memory_router, onboarding_router, onboarding_state_router, google_workspace_router, channels_email_router, website_ingestion_router, websocket_router, voice_test_router, verification_ui_router, email_connections_router, channel_connections_router, flows_router, assets_router, crm_sync_router):
         app.include_router(router)
     app.include_router(campaigns_router, prefix="/api/v1")
