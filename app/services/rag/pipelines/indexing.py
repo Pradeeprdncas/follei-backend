@@ -1,5 +1,6 @@
 ﻿"""End-to-end versioned indexing: parse -> classify -> chunk -> embed -> stores."""
 from pathlib import Path
+from uuid import UUID
 from sqlalchemy.orm import Session
 from qdrant_client.models import PointIdsList
 from app.config.database import SessionLocal
@@ -7,12 +8,12 @@ from app.config.qdrant import get_qdrant
 from app.config.settings import get_settings
 from app.models.chunk import Chunk
 from app.models.knowledge.fact_draft import BusinessFactDraft
-from app.models.knowledge.document import DocumentSection, DocumentVersion
+from app.models.knowledge.document import DocumentSection, DocumentVersion, KnowledgeSource
 from app.models.knowledge.entity import Entity
 from app.repositories.document import DocumentRepository
 from app.repositories.chunk import ChunkRepository
 from app.services.rag.parsing.parser import parse_file
-from app.services.rag.chunking.registry import chunk_document
+from app.services.knowledge.chunking_router import route_chunks
 from app.services.rag.classification import classify_document
 from app.services.rag.document_identity import reserve_document
 from app.services.rag.metadata.summarizer import summarize_text
@@ -49,10 +50,41 @@ def _prepare_failed_document_retry(db: Session, doc) -> None:
     db.commit()
 
 
+def _ensure_knowledge_source(db: Session, doc) -> KnowledgeSource:
+    """Give every indexed document a tenant-owned canonical source identifier."""
+    source_id = (doc.metadata_ or {}).get("knowledge_source_id")
+    source = None
+    if source_id:
+        try:
+            source = db.query(KnowledgeSource).filter(
+                KnowledgeSource.id == UUID(str(source_id)),
+                KnowledgeSource.tenant_id == doc.tenant_id,
+            ).first()
+        except (TypeError, ValueError):
+            source = None
+    if source is None:
+        source = KnowledgeSource(
+            tenant_id=doc.tenant_id,
+            name=doc.title,
+            source_type="upload",
+            status="processing",
+            config={"source_uri": doc.source_uri, "original_source_type": doc.source_type},
+        )
+        db.add(source)
+        db.flush()
+        doc.metadata_ = {**(doc.metadata_ or {}), "knowledge_source_id": str(source.id)}
+    else:
+        source.status = "processing"
+    db.commit()
+    return source
+
+
 def enqueue_document_memory_projection(db: Session, *, doc, chunk_count: int) -> None:
     """Idempotently schedule the clean FerretDB projection for an indexed document."""
     sections = db.query(DocumentSection).filter(DocumentSection.document_id == doc.id, DocumentSection.tenant_id == doc.tenant_id).order_by(DocumentSection.section_order).all()
     entities = db.query(Entity).filter(Entity.document_id == doc.id, Entity.tenant_id == doc.tenant_id).all()
+    chunks = db.query(Chunk).filter(Chunk.document_id == doc.id, Chunk.tenant_id == doc.tenant_id).order_by(Chunk.chunk_index).all()
+    source_id = str((doc.metadata_ or {}).get("knowledge_source_id") or "")
     enqueue_sync_event(
         db,
         tenant_id=doc.tenant_id,
@@ -76,6 +108,12 @@ def enqueue_document_memory_projection(db: Session, *, doc, chunk_count: int) ->
             "previous_document_id": str(doc.previous_document_id) if doc.previous_document_id else None,
             "sections": [{"section_id": str(row.id), "order": row.section_order, "title": row.title, "category": row.category, "section_type": row.section_type, "summary": row.summary, "source_chunk_ids": [str(chunk.id) for chunk in row.chunks]} for row in sections],
             "entities": [{"entity_id": str(row.id), "entity_type": row.entity_type, "entity_name": row.name, "category": row.category, "schema_key": row.schema_key, "schema_version": row.schema_version, "status": row.status, "data": row.data or {}, "source": {"chunk_ids": [str((row.metadata_ or {}).get("source_chunk_id"))] if (row.metadata_ or {}).get("source_chunk_id") else []}, "confidence": float(row.confidence) if row.confidence is not None else None} for row in entities],
+            "chunks": [{
+                "chunk_id": str(chunk.id), "source_id": source_id,
+                "content": chunk.text, "category": chunk.primary_category or doc.category,
+                "heading_path": list(chunk.section_path or []), "page_number": int(chunk.page or 0),
+                "chunk_type": chunk.chunk_type or "prose", "token_count": int(chunk.token_count or 0),
+            } for chunk in chunks],
         },
         idempotency_key=f"document.indexed:{doc.id}:v{doc.version}",
     )
@@ -92,6 +130,7 @@ async def index_document(file_path: str, tenant_id: str, *, source_uri: str | No
         source_type = path.suffix.lower().lstrip(".")
         source_uri = source_uri or f"file://{path.resolve()}"
         doc, duplicate = reserve_document(db=db, tenant_id=tenant_id, file_path=path, source_uri=source_uri, filename=filename, source_type=source_type, uploaded_by=uploaded_by, workspace_id=workspace_id, processing_instructions=processing_instructions, source_metadata=source_metadata)
+        knowledge_source = _ensure_knowledge_source(db, doc)
         if duplicate and doc.status != "failed":
             if source_metadata:
                 existing_chunk_ids = [str(value[0]) for value in db.query(Chunk.id).filter(Chunk.document_id == doc.id, Chunk.tenant_id == tenant_id).all()]
@@ -110,6 +149,7 @@ async def index_document(file_path: str, tenant_id: str, *, source_uri: str | No
                 doc=doc,
                 chunk_count=db.query(Chunk.id).filter(Chunk.document_id == doc.id, Chunk.tenant_id == tenant_id).count(),
             )
+            knowledge_source.status = "active"
             db.commit()
             logger.info(f"Skipping duplicate document {doc.id}; hash already indexed")
             details = {"document_id": str(doc.id), "disposition": "duplicate", "version": doc.version, "status": doc.status}
@@ -127,10 +167,20 @@ async def index_document(file_path: str, tenant_id: str, *, source_uri: str | No
         doc.category = category
         doc.primary_category = category
         doc.extractor_version = "category-registry-v1"
-        doc.chunker_version = f"{CATEGORY_CONFIGS[category]['chunking_hint']}-v1"
         doc.total_pages = len(pages)
+        routed = route_chunks(path, pages, metadata={
+            "source_type": source_type, "category": category, "sensitivity": doc.sensitivity,
+            "tenant_id": str(doc.tenant_id), "source_id": str(knowledge_source.id),
+            "chunking_strategy": (knowledge_source.config or {}).get("chunking_strategy"),
+        })
+        doc.chunker_version = f"{routed.strategy}-v1"
+        knowledge_source.config = {
+            **(knowledge_source.config or {}),
+            "chunking_strategy": routed.strategy,
+            "chunker_version": doc.chunker_version,
+        }
         db.commit()
-        chunks_data = chunk_document(path, pages, metadata={"source_type": source_type, "category": category, "sensitivity": doc.sensitivity})
+        chunks_data = routed.chunks
         all_text = " ".join(chunk["text"] for chunk in chunks_data)
         keywords = extract_keywords(all_text, top_n=10)
         summary = await summarize_text(all_text[:10000])
@@ -155,6 +205,13 @@ async def index_document(file_path: str, tenant_id: str, *, source_uri: str | No
                 parent_chunk_id=chunk_data.get("parent_chunk_id"), prev_chunk_id=chunk_data.get("prev_chunk_id"),
                 next_chunk_id=chunk_data.get("next_chunk_id"), chunk_type=chunk_data.get("chunk_type"),
                 section_path=chunk_data.get("section_path"), word_count=chunk_data.get("word_count"),
+                token_count=chunk_data.get("token_count"),
+                metadata_={
+                    "source_id": str(knowledge_source.id),
+                    "heading_path": list(chunk_data.get("heading_path") or []),
+                    "chunk_type": chunk_data.get("chunk_type"),
+                    "chunking_strategy": routed.strategy,
+                },
                 tags=keywords[:5] + [f"category:{category}", "approval:draft"], permissions=[],
             ))
 
@@ -170,6 +227,7 @@ async def index_document(file_path: str, tenant_id: str, *, source_uri: str | No
                     "chunk_type": chunk.chunk_type, "parent_chunk_id": chunk.parent_chunk_id,
                     "prev_chunk_id": chunk.prev_chunk_id, "next_chunk_id": chunk.next_chunk_id,
                     "section_path": chunk.section_path, "heading_path": chunk.section_path or [],
+                    "source_id": str(knowledge_source.id),
                     "word_count": chunk.word_count, "tags": chunk.tags, "category": category, "primary_category": category, "detected_category": chunk.detected_category, "section_id": str(chunk.section_id) if chunk.section_id else None, "document_version_id": str(chunk.document_version_id) if chunk.document_version_id else None,
                     "approval_status": "draft", "sensitivity": doc.sensitivity, "source_type": source_type,
                     "lead_ids": list((doc.metadata_ or {}).get("lead_ids") or []),
@@ -189,6 +247,7 @@ async def index_document(file_path: str, tenant_id: str, *, source_uri: str | No
             name = str(payload.get("name") or payload.get("title") or payload.get("question") or doc.title)
             db.add(Entity(tenant_id=doc.tenant_id, workspace_id=doc.workspace_id, document_id=doc.id, document_version_id=version_row.id if version_row else None, entity_type=draft.fact_type, name=name, category=category, schema_key=f"{category}:{draft.fact_type}", schema_version="1", data=payload, confidence=draft.extraction_confidence, status="draft", metadata_={"fact_id": str(draft.id), "source_chunk_id": str(draft.chunk_id) if draft.chunk_id else None}))
         enqueue_document_memory_projection(db, doc=doc, chunk_count=len(chunk_records))
+        knowledge_source.status = "active"
         db.commit()
         logger.info(f"Indexed document={doc.id} version={doc.version} category={category} chunks={len(chunk_records)}")
         details = {"document_id": str(doc.id), "disposition": "new_version" if doc.previous_document_id else "new", "version": doc.version, "status": doc.status}
@@ -196,6 +255,9 @@ async def index_document(file_path: str, tenant_id: str, *, source_uri: str | No
     except Exception:
         if "doc" in locals():
             doc_repo.update_status(str(doc.id), "failed")
+        if "knowledge_source" in locals():
+            knowledge_source.status = "failed"
+            db.commit()
         raise
     finally:
         if close_db:

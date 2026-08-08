@@ -14,7 +14,7 @@ from app.config.database import SessionLocal
 from app.config.qdrant import get_qdrant
 from app.config.settings import get_settings
 from app.models.knowledge.sync_event import KnowledgeSyncEvent
-from app.services.knowledge.memory_store import upsert_category_document_projection, upsert_crm_record_memory, upsert_document_memory, upsert_summary_memory
+from app.services.knowledge.memory_store import upsert_category_document_projection, upsert_crm_record_memory, upsert_document_chunks, upsert_document_memory, upsert_summary_memory
 from app.services.rag.embeddings.mistral import embed_texts
 from app.services.rag.vectorstore.insert import insert_chunks
 from app.services.rag.vectorstore.qdrant import ensure_collection
@@ -109,6 +109,11 @@ async def _ferret_document(event: KnowledgeSyncEvent) -> str:
         source_uri=payload.get("source_uri"),
         previous_document_id=payload.get("previous_document_id"),
         source_metadata=payload.get("source_metadata"),
+    )
+    upsert_document_chunks(
+        tenant_id=str(event.tenant_id),
+        document_id=str(event.aggregate_id),
+        chunks=list(payload.get("chunks") or []),
     )
     upsert_category_document_projection(
         tenant_id=str(event.tenant_id), document_id=str(event.aggregate_id),

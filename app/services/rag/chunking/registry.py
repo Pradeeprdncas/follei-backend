@@ -36,6 +36,10 @@ def chunk_document(file_path: str | Path, pages: list[dict], *, metadata: dict |
     routing_type = category or source_type
     if is_structured_source(routing_type, path.name):
         return []
-    text = "\n".join(str(page.get("text", "")) for page in pages)
-    strategy = strategy_for(routing_type, path.name, has_table=looks_like_table(text))
-    return strategy.chunk(pages, metadata={**metadata, "source_type": source_type, "category": category or "general"})
+    from app.services.knowledge.chunking_router import route_chunks
+
+    return route_chunks(
+        path,
+        pages,
+        metadata={**metadata, "source_type": source_type, "category": category or "general"},
+    ).chunks

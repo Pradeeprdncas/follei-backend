@@ -24,10 +24,11 @@ def test_pricing_pdf_keeps_rows_atomic_and_heading_path(tmp_path):
     pdf.close()
     chunks = chunk_document(path, pages)
     assert chunks
-    assert all(c["chunk_type"] == "table_row" for c in chunks)
+    assert all(c["chunk_type"] == "table" for c in chunks)
     assert all("Plan | Price | Seats" in c["text"] for c in chunks)
     assert all("Pricing" in c["section_path"] for c in chunks)
     assert all(c["approval_status"] == "draft" for c in chunks)
+    assert all(c["heading_path"] == ["Pricing"] for c in chunks)
 
 
 def test_call_thread_preserves_speaker_and_timestamp():

@@ -83,13 +83,19 @@ async def test_failed_target_is_retryable_without_repeating_completed_target():
 
 
 @pytest.mark.asyncio
-async def test_document_indexed_routes_only_clean_projection_to_ferret(monkeypatch):
-    captured = {}
+async def test_document_indexed_routes_document_and_structural_chunks_to_ferret(monkeypatch):
+    captured = {"document": {}, "chunks": {}}
 
     def write_projection(**values):
-        captured.update(values)
+        captured["document"].update(values)
+
+    def write_chunks(**values):
+        captured["chunks"].update(values)
 
     monkeypatch.setattr(outbox, "upsert_document_memory", write_projection)
+    monkeypatch.setattr(outbox, "upsert_document_chunks", write_chunks)
+    monkeypatch.setattr(outbox, "upsert_category_document_projection", lambda **_values: None)
+    source_id = str(uuid4())
     event = SimpleNamespace(
         id=uuid4(), tenant_id=uuid4(), aggregate_id=uuid4(),
         event_type="document.indexed",
@@ -99,6 +105,12 @@ async def test_document_indexed_routes_only_clean_projection_to_ferret(monkeypat
             "summary": "Approved support guidance.", "keywords": ["support"],
             "chunk_count": 3, "source_uri": "object://safe/source",
             "previous_document_id": str(uuid4()),
+            "chunks": [{
+                "chunk_id": str(uuid4()), "source_id": source_id,
+                "content": "Escalate severity-one cases immediately.",
+                "heading_path": ["Support", "Escalation"], "page_number": 4,
+                "chunk_type": "prose", "token_count": 5, "category": "support_process",
+            }],
         },
         deliveries={"postgres": "completed", "ferret": "pending"},
         status="pending", attempt_count=0, last_error=None, completed_at=None,
@@ -108,7 +120,10 @@ async def test_document_indexed_routes_only_clean_projection_to_ferret(monkeypat
 
     assert completed.status == "completed"
     assert completed.deliveries == {"postgres": "completed", "ferret": "completed"}
-    assert captured["tenant_id"] == str(event.tenant_id)
-    assert captured["document_id"] == str(event.aggregate_id)
-    assert captured["summary"] == "Approved support guidance."
-    assert "text" not in captured and "raw_content" not in captured
+    assert captured["document"]["tenant_id"] == str(event.tenant_id)
+    assert captured["document"]["document_id"] == str(event.aggregate_id)
+    assert captured["document"]["summary"] == "Approved support guidance."
+    assert captured["chunks"]["tenant_id"] == str(event.tenant_id)
+    assert captured["chunks"]["chunks"][0]["source_id"] == source_id
+    assert captured["chunks"]["chunks"][0]["heading_path"] == ["Support", "Escalation"]
+    assert captured["chunks"]["chunks"][0]["chunk_type"] == "prose"

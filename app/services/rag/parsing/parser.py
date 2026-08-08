@@ -57,6 +57,7 @@ def parse_file(file_path: str | Path) -> list[dict]:
                 "page": page.get("page", 0),
                 "text": text,
                 "heading": page.get("heading"),
+                **{key: page[key] for key in ("structure", "faqs") if key in page},
             })
 
     logger.info(f"Parsed {path.name} → {len(cleaned)} segments")

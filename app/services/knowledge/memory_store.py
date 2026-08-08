@@ -83,9 +83,8 @@ def upsert_document_memory(
     """Write the clean long-term-memory projection for one indexed document.
 
     PostgreSQL remains the canonical document/fact store and Qdrant owns chunk
-    embeddings.  FerretDB receives only a compact, queryable memory record so
-    an upload is represented in all three stores without copying raw blobs or
-    creating a second source of truth.
+    embeddings. FerretDB receives this compact document projection plus the
+    structural chunk projection written by ``upsert_document_chunks``.
     """
     collection = get_context_database()["knowledge_document_memory"]
     key = {"tenant_id": str(tenant_id), "document_id": str(document_id)}
@@ -111,6 +110,45 @@ def upsert_document_memory(
     }
     collection.replace_one(key, document, upsert=True)
     return document
+
+
+def upsert_document_chunks(
+    *,
+    tenant_id: str,
+    document_id: str,
+    chunks: list[dict[str, Any]],
+) -> int:
+    """Project chunk content and its mandatory structural metadata to FerretDB."""
+    collection = get_context_database()["knowledge_chunks"]
+    retained_ids: list[str] = []
+    for chunk in chunks:
+        chunk_id = str(chunk.get("chunk_id") or "")
+        source_id = str(chunk.get("source_id") or "")
+        content = str(chunk.get("content") or "").strip()
+        if not chunk_id or not source_id or not content:
+            raise ValueError("Every FerretDB chunk requires chunk_id, source_id, and content")
+        retained_ids.append(chunk_id)
+        key = {"tenant_id": str(tenant_id), "chunk_id": chunk_id}
+        collection.replace_one(key, {
+            **key,
+            "document_id": str(document_id),
+            "source_id": source_id,
+            "category": chunk.get("category"),
+            "content": content,
+            "heading_path": [str(value) for value in (chunk.get("heading_path") or [])],
+            "page_number": int(chunk.get("page_number") or 0),
+            "chunk_type": str(chunk.get("chunk_type") or "prose"),
+            "token_count": int(chunk.get("token_count") or 0),
+            "projection_type": "document_chunk",
+            "canonical_store": "postgres",
+            "semantic_store": "qdrant",
+            "updated_at": _now(),
+        }, upsert=True)
+    stale_filter: dict[str, Any] = {"tenant_id": str(tenant_id), "document_id": str(document_id)}
+    if retained_ids:
+        stale_filter["chunk_id"] = {"$nin": retained_ids}
+    collection.delete_many(stale_filter)
+    return len(retained_ids)
 
 
 def upsert_category_document_projection(*, tenant_id: str, document_id: str, document_version_id: str | None, workspace_id: str | None, title: str, primary_category: str | None, secondary_categories: list[str], summary: str, sections: list[dict[str, Any]], entities: list[dict[str, Any]], source_revision: int, source_metadata: dict[str, Any] | None = None) -> None:
