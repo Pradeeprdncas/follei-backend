@@ -45,6 +45,8 @@ aiofiles
 aiohttp
 beautifulsoup4
 playwright
+crawl4ai
+Scrapy
 boto3
 
 tenacity

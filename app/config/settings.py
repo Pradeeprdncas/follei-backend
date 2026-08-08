@@ -57,6 +57,9 @@ class Settings(BaseSettings):
     KAFKA_TOPIC_INDEXING: str = "document-indexing"
     KAFKA_TOPIC_INDEXING_DLQ: str = "document-indexing-dlq"
     KAFKA_TOPIC_CHAT: str = "chat-requests"
+    KAFKA_TOPIC_WEBSITE_INGESTION: str = "website-ingestion"
+    KAFKA_TOPIC_GOOGLE_WORKSPACE_SYNC: str = "google-workspace-sync"
+    KAFKA_TOPIC_CRM_SYNC: str = "crm-sync"
     KAFKA_CONSUMER_GROUP: str = "follei-rag-group"
     KAFKA_INDEXING_MAX_ATTEMPTS: int = 3
 
@@ -90,6 +93,7 @@ class Settings(BaseSettings):
     SALESFORCE_CLIENT_SECRET: str = Field(default="")
     HUBSPOT_CLIENT_ID: str = Field(default="")
     HUBSPOT_CLIENT_SECRET: str = Field(default="")
+    HUBSPOT_REDIRECT_URI: str = Field(default="http://localhost:8000/api/v1/crm/hubspot/oauth/callback")
     ZOHO_CLIENT_ID: str = Field(default="")
     ZOHO_CLIENT_SECRET: str = Field(default="")
     ZOHO_ACCOUNTS_DOMAIN: str = Field(default="https://accounts.zoho.com")
@@ -182,6 +186,9 @@ class Settings(BaseSettings):
         default="http://127.0.0.1:8000/api/email-connections/gmail/oauth/callback"
     )
     GMAIL_OAUTH_SUCCESS_URL: str = Field(default="http://127.0.0.1:8000/tenant")
+    GOOGLE_WORKSPACE_OAUTH_REDIRECT_URI: str = Field(
+        default="http://127.0.0.1:8000/api/v1/integrations/google-workspace/oauth/callback"
+    )
     GMAIL_OAUTH_STATE_TTL_SECONDS: int = 600
     # Optional fallback tenant when an inbound sender matches no known lead.
     # Empty means "skip senders we can't map to a tenant".

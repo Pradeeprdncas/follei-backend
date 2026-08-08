@@ -1,19 +1,68 @@
 """Tenant-authenticated HubSpot connection and three-store synchronization API."""
 from __future__ import annotations
 
-from uuid import UUID
+import json
+from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi.responses import HTMLResponse
 from sqlalchemy.orm import Session
 
 from app.config.database import get_db
-from app.core.security import get_authenticated_tenant_id
+from app.core.security import get_authenticated_tenant_id, get_authenticated_user_id
+from app.config.kafka import ensure_topics, get_producer
+from app.config.settings import get_settings
 from app.models.crm import CRMRecord, CRMSyncRun, TenantCRMConnection
 from app.services.crm.hubspot import HubSpotClient, HubSpotError
 from app.services.crm.schemas import CRMConnectionResponse, CRMRecordResponse, HubSpotConnectionCreate, HubSpotSyncRequest
 from app.services.crm.sync import encrypt_crm_token, sync_hubspot
+from app.services.integrations.hubspot_oauth import HubSpotOAuthError, HubSpotOAuthService
+from app.models.knowledge.document import KnowledgeSource
+from app.models.knowledge.ingestion import IngestionRun, SourceIngestionJob
+from app.schemas.api_envelope import api_envelope
 
 router = APIRouter(prefix="/api/v1/crm", tags=["CRM Sync"])
+_settings = get_settings()
+
+
+def _queue_hubspot_sync(db: Session, connection: TenantCRMConnection, resources: list[str], *, page_size: int = 100, max_pages: int = 10, project_now: bool = False):
+    source = db.query(KnowledgeSource).filter_by(tenant_id=connection.tenant_id, source_type="hubspot").first()
+    if source is None:
+        source = KnowledgeSource(id=uuid4(), tenant_id=connection.tenant_id, name="HubSpot CRM", source_type="hubspot", status="queued", config={"connection_id": str(connection.id)})
+        db.add(source)
+    source.status = "queued"
+    ingestion_run = IngestionRun(id=uuid4(), tenant_id=connection.tenant_id, source_id=source.id, status="queued")
+    ingestion_job = SourceIngestionJob(id=uuid4(), tenant_id=connection.tenant_id, run_id=ingestion_run.id, job_type="hubspot_sync", target=connection.external_account_id, status="queued", payload={"resources": resources})
+    crm_run = CRMSyncRun(id=uuid4(), tenant_id=connection.tenant_id, connection_id=connection.id, provider="hubspot", status="queued", requested_resources=resources, object_counts={}, event_ids=[])
+    db.add_all([ingestion_run, ingestion_job, crm_run]); db.commit()
+    ensure_topics(); producer = get_producer()
+    producer.send(_settings.KAFKA_TOPIC_CRM_SYNC, key=str(crm_run.id), value={
+        "crm_run_id": str(crm_run.id), "ingestion_run_id": str(ingestion_run.id), "ingestion_job_id": str(ingestion_job.id),
+        "source_id": str(source.id), "connection_id": str(connection.id), "tenant_id": str(connection.tenant_id),
+        "resources": resources, "page_size": page_size, "max_pages_per_resource": max_pages, "project_now": project_now,
+    }); producer.flush()
+    return crm_run, ingestion_run, ingestion_job
+
+
+@router.post("/hubspot/oauth/start")
+def start_hubspot_oauth(db: Session = Depends(get_db), tenant_id: str = Depends(get_authenticated_tenant_id), user_id: str = Depends(get_authenticated_user_id)):
+    try:
+        url = HubSpotOAuthService().authorization_url(db, tenant_id=tenant_id, user_id=user_id)
+    except HubSpotOAuthError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return api_envelope({"authorization_url": url, "provider": "hubspot"})
+
+
+@router.get("/hubspot/oauth/callback", response_class=HTMLResponse)
+async def hubspot_oauth_callback(state: str = Query(...), code: str = Query(...), db: Session = Depends(get_db)):
+    try:
+        connection = await HubSpotOAuthService().complete(db, state=state, code=code)
+        run, _, _ = _queue_hubspot_sync(db, connection, ["contact", "company", "deal"])
+        result = {"type": "follei:integration-connected", "provider": "hubspot", "connection_id": str(connection.id), "run_id": str(run.id)}
+    except Exception as exc:
+        result = {"type": "follei:integration-error", "provider": "hubspot", "message": str(exc)}
+    encoded = json.dumps(result).replace("<", "\\u003c")
+    return HTMLResponse(f"<!doctype html><title>Follei HubSpot</title><p>You may close this window.</p><script>const result={encoded};if(window.opener)window.opener.postMessage(result,window.location.origin);</script>")
 
 
 def _connection_payload(row: TenantCRMConnection) -> CRMConnectionResponse:
@@ -31,7 +80,7 @@ def list_connections(db: Session = Depends(get_db), tenant_id: str = Depends(get
     return [_connection_payload(row) for row in rows]
 
 
-@router.post("/hubspot/connections", response_model=CRMConnectionResponse, status_code=status.HTTP_201_CREATED)
+@router.post("/hubspot/connections", response_model=CRMConnectionResponse, status_code=status.HTTP_201_CREATED, deprecated=True)
 async def connect_hubspot(body: HubSpotConnectionCreate, db: Session = Depends(get_db), tenant_id: str = Depends(get_authenticated_tenant_id)):
     token = body.access_token.get_secret_value()
     if body.validate_connection:
@@ -68,16 +117,16 @@ def disconnect_hubspot(db: Session = Depends(get_db), tenant_id: str = Depends(g
 
 
 @router.post("/hubspot/sync", status_code=status.HTTP_202_ACCEPTED)
-async def run_hubspot_sync(body: HubSpotSyncRequest, db: Session = Depends(get_db), tenant_id: str = Depends(get_authenticated_tenant_id)):
+def run_hubspot_sync(body: HubSpotSyncRequest, db: Session = Depends(get_db), tenant_id: str = Depends(get_authenticated_tenant_id)):
     tenant_uuid = UUID(tenant_id)
     connection = db.query(TenantCRMConnection).filter_by(tenant_id=tenant_uuid, provider="hubspot", status="active").first()
     if not connection:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Connect HubSpot for this tenant before syncing")
     try:
-        run = await sync_hubspot(db, tenant_id=tenant_uuid, connection=connection, resources=list(body.resources), page_size=body.page_size, max_pages_per_resource=body.max_pages_per_resource, project_now=body.project_now)
-    except HubSpotError as exc:
-        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
-    return {"id": str(run.id), "provider": run.provider, "status": run.status, "object_counts": run.object_counts, "projection_event_count": len(run.event_ids or []), "error": run.error}
+        run, ingestion_run, job = _queue_hubspot_sync(db, connection, list(body.resources), page_size=body.page_size, max_pages=body.max_pages_per_resource, project_now=body.project_now)
+    except Exception as exc:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="HubSpot sync could not be queued") from exc
+    return api_envelope({"id": str(run.id), "provider": run.provider, "status": run.status, "ingestion_run_id": str(ingestion_run.id), "job_id": str(job.id)})
 
 
 @router.get("/records", response_model=list[CRMRecordResponse])

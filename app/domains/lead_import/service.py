@@ -6,12 +6,12 @@ import re
 import time
 from uuid import UUID
 
-from app.domains.lead_import.exceptions import JobNotFoundError, JobNotReadyError
+from app.domains.lead_import.exceptions import JobNotFoundError, JobNotReadyError, LeadImportPolicyError
 from app.domains.lead_import.constants import ImportStatus, RowStatus
 from app.domains.lead_import.models import LeadImportJob, LeadImportRow
 from app.domains.lead_import.repository import LeadImportRepository
 from app.domains.lead_import.parsers import ParserFactory, ExtractedDocument
-from app.domains.lead_import.validators import validate_lead_row, is_blank_row
+from app.domains.lead_import.validators import MINIMUM_ACCEPTED_LEADS, lead_import_policy, validate_lead_row, is_blank_row
 from app.domains.lead_import.utils import (
     split_full_name,
     normalize_email,
@@ -437,7 +437,15 @@ class LeadImportService:
             # Phase 5: Validate
             t0 = time.perf_counter()
             self.repo.update_job_status(job.id, ImportStatus.VALIDATING)
-            self._validate_rows(job.id)
+            accepted_rows, rejected_rows = self._validate_rows(job.id)
+            policy_state = {
+                **lead_import_policy(),
+                "accepted_rows": accepted_rows,
+                "rejected_rows": rejected_rows,
+                "can_proceed": accepted_rows >= MINIMUM_ACCEPTED_LEADS,
+            }
+            job.statistics = {**(job.statistics or {}), "import_policy": policy_state}
+            self.repo.db.flush()
             timings["validate"] = time.perf_counter() - t0
             if progress_callback:
                 progress_callback(6, 1.0)
@@ -1020,17 +1028,27 @@ class LeadImportService:
 
         return leads
 
-    def _validate_rows(self, job_id: UUID) -> None:
-        """Validate all pending rows for the job."""
-        rows = self.repo.get_rows_by_job(job_id, status=RowStatus.PENDING)
+    def _validate_rows(self, job_id: UUID) -> tuple[int, int]:
+        """Reject rows individually; never fail the whole batch during validation."""
+        rows = self.repo.get_rows_by_job(job_id)
+        accepted = 0
+        rejected = 0
         for row in rows:
+            if row.status in {RowStatus.SPAM, RowStatus.SKIPPED}:
+                rejected += 1
+                continue
             extracted = row.extracted_data or {}
             if is_blank_row(extracted):
                 self.repo.update_row(row.id, status=RowStatus.INVALID, error="Blank row", selected=False)
+                rejected += 1
                 continue
             errors = validate_lead_row(extracted)
             if errors:
                 self.repo.update_row(row.id, status=RowStatus.INVALID, error="; ".join(errors), selected=False)
+                rejected += 1
+            else:
+                accepted += 1
+        return accepted, rejected
 
     def _deduplicate_rows(self, job_id: UUID) -> None:
         """Compare each valid row against the existing Lead table and classify."""
@@ -1154,6 +1172,7 @@ class LeadImportService:
             "statistics": job.statistics,
             "total_rows": job.total_rows or 0,
             "document_classification": doc_classification,
+            "import_policy": dict((job.statistics or {}).get("import_policy") or {}),
             "new_rows": [_row_to_preview(r) for r in new_rows],
             "update_rows": [_row_to_preview(r) for r in update_rows],
             "duplicate_rows": [_row_to_preview(r) for r in duplicate_rows],
@@ -1221,6 +1240,11 @@ class LeadImportService:
         if job.status != ImportStatus.PREVIEW_READY:
             raise JobNotReadyError(str(job_id), job.status, ImportStatus.PREVIEW_READY)
 
+        policy_state = dict((job.statistics or {}).get("import_policy") or {})
+        accepted_rows = int(policy_state.get("accepted_rows") or 0)
+        if accepted_rows < MINIMUM_ACCEPTED_LEADS:
+            raise LeadImportPolicyError(accepted_rows=accepted_rows, required_rows=MINIMUM_ACCEPTED_LEADS)
+
         selected = self.repo.get_selected_rows(job_id)
         imported = 0
         imported_new = 0
@@ -1270,6 +1294,9 @@ class LeadImportService:
             if status == RowStatus.CONFLICT:
                 continue
 
+            if status not in {RowStatus.NEW, RowStatus.UPDATE}:
+                continue
+
             email = (extracted.get("email") or "").strip()
             if not email:
                 invalid_attempts += 1
@@ -1290,6 +1317,7 @@ class LeadImportService:
                             pass
                     self.repo.db.flush()
                     persist_import_projection(existing, row, extracted)
+                    existing.verification_status = "validated"
                     self.repo.update_row(row.id, status=RowStatus.COMMITTED, lead_id=existing.id)
                     publisher.publish(EVENT_LEAD_CREATED, str(job.tenant_id), {
                         "lead_id": str(existing.id),
@@ -1311,6 +1339,7 @@ class LeadImportService:
                 company=(extracted.get("company") or "").strip() or None,
                 phone=phone_number if phone_number <= 2_147_483_647 else 0,
                 status="new",
+                verification_status="validated",
             )
             self.repo.db.add(lead)
             self.repo.db.flush()
@@ -1341,6 +1370,9 @@ class LeadImportService:
             "total_duplicates": pre_duplicates,
             "total_conflicts": pre_conflicts,
             "total_invalid": invalid_attempts,
+            "accepted_rows": accepted_rows,
+            "rejected_rows": int(policy_state.get("rejected_rows") or 0),
+            "policy": policy_state,
             "message": f"Imported {imported} leads ({imported_new} new, {imported_updates} updates); {pre_duplicates} duplicates, {pre_conflicts} conflicts, {invalid_attempts} invalid",
         }
 

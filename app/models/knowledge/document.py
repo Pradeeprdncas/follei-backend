@@ -15,6 +15,7 @@ class KnowledgeSource(Base):
     tenant_id = Column(Uuid(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False, index=True)
     name = Column(String, nullable=False)
     source_type = Column(String, nullable=False)
+    status = Column(String(24), nullable=False, default="active", index=True)
     config = Column(JSON, default=dict, nullable=False)
     is_active = Column(Boolean, default=True, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)

@@ -30,10 +30,15 @@ from app.domains.lead_import.schemas import (
     BulkActionRequest,
     BulkActionResponse,
 )
-from app.domains.lead_import.exceptions import JobNotFoundError, JobNotReadyError
+from app.domains.lead_import.exceptions import JobNotFoundError, JobNotReadyError, LeadImportPolicyError
 from app.domains.lead_import.constants import FileType
 from app.domains.lead_import.utils import detect_file_type
-from app.domains.lead_import.validators import validate_lead_row, is_blank_row
+from app.domains.lead_import.validators import (
+    MINIMUM_ACCEPTED_LEADS,
+    lead_import_policy,
+    validate_lead_row,
+    is_blank_row,
+)
 from app.models.leads.lead import Lead
 from app.domains.lead_import.models import LeadImportJob
 from app.domains.lead_import.utils import split_full_name, normalize_email, normalize_phone, normalize_website
@@ -49,6 +54,7 @@ from app.config.ferretdb import get_context_database
 router = APIRouter(prefix="/leads/import", tags=["Lead Import"])
 _settings = get_settings()
 _URL_PATTERN = re.compile(r"https?://[^\s<>\"']+", re.IGNORECASE)
+MINIMUM_ONBOARDING_LEAD_ROWS = MINIMUM_ACCEPTED_LEADS
 
 
 def _owned_job(db: Session, job_id: str, tenant_id: str) -> LeadImportJob:
@@ -120,12 +126,10 @@ _RowImportResult = list[dict]  # list of {row_index, email, action, error?, lead
 
 def _write_lead(db, tenant_id, row: dict) -> dict:
     """Insert or skip a single lead row. Returns result dict."""
+    validation_errors = validate_lead_row(row)
+    if validation_errors:
+        return {"action": "skipped", "error": "; ".join(validation_errors)}
     email = row.get("email", "").strip().lower()
-    if not email:
-        return {"action": "skipped", "error": "No email"}
-
-    if "@" not in email:
-        return {"action": "skipped", "error": f"Invalid email: {email}"}
 
     # Dedup by email within tenant
     existing = db.execute(
@@ -158,6 +162,7 @@ def _write_lead(db, tenant_id, row: dict) -> dict:
         phone=phone_int,
         profile_data={key: value for key, value in row.items() if key not in {"email", "first_name", "last_name", "full_name", "company", "phone"}},
         status="new",
+        verification_status="validated",
     )
     db.add(lead)
     db.flush()
@@ -177,6 +182,10 @@ class ImportResult(BaseModel):
     skipped: int
     total: int
     errors: list[dict]
+    accepted_rows: int
+    rejected_rows: int
+    can_proceed: bool
+    policy: dict
     flow_enrollment: dict | None = None
 
 
@@ -188,6 +197,10 @@ class PreviewRow(BaseModel):
 class PreviewResult(BaseModel):
     rows: list[PreviewRow]
     total: int
+    valid_rows: int
+    invalid_rows: int
+    batch_errors: list[dict]
+    policy: dict
 
 
 # ── POST /leads/import — sync direct import ──────────────────────
@@ -217,6 +230,25 @@ async def import_leads(
     rows = _parse_csv(text)
     if not rows:
         raise HTTPException(status_code=400, detail="No data rows found in CSV")
+
+    validation = [(index, row, validate_lead_row(row)) for index, row in enumerate(rows)]
+    accepted_rows = sum(not errors for _, _, errors in validation)
+    rejected_preview = [
+        {"row_index": index, "reasons": errors}
+        for index, _, errors in validation if errors
+    ]
+    if accepted_rows < MINIMUM_ONBOARDING_LEAD_ROWS:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "code": "minimum_accepted_rows_not_met",
+                "minimum_accepted_rows": MINIMUM_ONBOARDING_LEAD_ROWS,
+                "accepted_rows": accepted_rows,
+                "rejected_rows": len(rows) - accepted_rows,
+                "row_errors": rejected_preview[:100],
+                "partial_accept": True,
+            },
+        )
 
     if len(rows) > 1000:
         raise HTTPException(
@@ -268,7 +300,12 @@ async def import_leads(
         from app.services.flows.service import enroll_leads
         created_ids = [item["lead_id"] for item in results if item.get("action") == "created"]
         flow_enrollment = enroll_leads(db, tenant_uuid, created_ids, "lead_import") if created_ids else {"status": "not_enrolled", "enrolled": 0, "reason": "no_new_leads"}
-        return ImportResult(created=created, duplicates=duplicates, skipped=skipped, total=len(rows), errors=errors, flow_enrollment=flow_enrollment)
+        return ImportResult(
+            created=created, duplicates=duplicates, skipped=skipped, total=len(rows), errors=errors,
+            accepted_rows=accepted_rows, rejected_rows=len(rows) - accepted_rows,
+            can_proceed=accepted_rows >= MINIMUM_ONBOARDING_LEAD_ROWS,
+            policy=lead_import_policy(), flow_enrollment=flow_enrollment,
+        )
     except Exception:
         db.rollback()
         raise
@@ -299,7 +336,18 @@ async def preview_import(file: UploadFile = File(...)):
             errs = ["Blank row"] + errs
         preview_rows.append(PreviewRow(row_index=i, data=row, errors=errs))
 
-    return PreviewResult(rows=preview_rows, total=len(preview_rows))
+    valid = sum(not row.errors for row in preview_rows)
+    batch_errors = []
+    if valid < MINIMUM_ONBOARDING_LEAD_ROWS:
+        batch_errors.append({"code": "minimum_accepted_rows_not_met", "minimum_accepted_rows": MINIMUM_ONBOARDING_LEAD_ROWS, "accepted_rows": valid, "rejected_rows": len(preview_rows) - valid})
+    return PreviewResult(
+        rows=preview_rows,
+        total=len(preview_rows),
+        valid_rows=valid,
+        invalid_rows=len(preview_rows) - valid,
+        batch_errors=batch_errors,
+        policy={**lead_import_policy(), "can_proceed": valid >= MINIMUM_ONBOARDING_LEAD_ROWS},
+    )
 
 
 # ── POST /leads/import/async — job-based for large files ─────────
@@ -327,6 +375,13 @@ async def import_leads_async(
         raise HTTPException(status_code=400, detail=str(e))
 
     content = await file.read()
+    if file_type == FileType.CSV:
+        try:
+            candidate_rows = _parse_csv(content.decode("utf-8-sig"))
+        except (UnicodeDecodeError, csv.Error):
+            candidate_rows = _parse_csv(content.decode("latin-1"))
+        if len(candidate_rows) < MINIMUM_ONBOARDING_LEAD_ROWS:
+            raise HTTPException(status_code=422, detail={"code": "minimum_accepted_rows_not_met", "minimum_accepted_rows": MINIMUM_ONBOARDING_LEAD_ROWS, "accepted_rows": 0, "candidate_rows": len(candidate_rows), "partial_accept": True})
     fd, temp_path = tempfile.mkstemp(suffix=f".{file_type}")
     try:
         os.write(fd, content)
@@ -585,6 +640,8 @@ def get_preview(
         raise HTTPException(status_code=404, detail=str(e))
     except JobNotReadyError as e:
         raise HTTPException(status_code=409, detail=str(e))
+    except LeadImportPolicyError as e:
+        raise HTTPException(status_code=422, detail=e.details)
 
 
 @router.post("/{job_id}/commit", response_model=LeadImportCommitResponse)
@@ -606,6 +663,8 @@ def commit_import(
         raise HTTPException(status_code=404, detail=str(e))
     except JobNotReadyError as e:
         raise HTTPException(status_code=409, detail=str(e))
+    except LeadImportPolicyError as e:
+        raise HTTPException(status_code=422, detail=e.details)
 
 
 @router.put("/{job_id}/rows/{row_id}")

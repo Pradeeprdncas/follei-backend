@@ -2,12 +2,14 @@
 from alembic import context
 from sqlalchemy import engine_from_config, pool
 from app.config.settings import get_settings
+from app.database.base import Base
+import app.models  # noqa: F401 - registers every mapping for autogenerate
 
 config = context.config
 if config.config_file_name:
     fileConfig(config.config_file_name)
 config.set_main_option("sqlalchemy.url", get_settings().DATABASE_URL)
-target_metadata = None
+target_metadata = Base.metadata
 
 
 def run_migrations_offline() -> None:

@@ -30,6 +30,7 @@ class Lead(Base):
     last_name = Column(String, nullable=True)
     company = Column(String, nullable=True)
     status = Column(String, default="new") # 'new', 'qualified', 'disqualified', 'converted'
+    verification_status = Column(String(24), nullable=False, default="pending", index=True)
     revenue_score = Column(Integer, default=0)
     phone = Column(Integer, default=0)
     # Structured import fields that do not belong in the narrow operational CRM

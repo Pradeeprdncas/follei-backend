@@ -75,11 +75,16 @@ async def sync_hubspot(
     max_pages_per_resource: int = 10,
     project_now: bool = True,
     client_factory: Callable[[str], HubSpotClient] = HubSpotClient,
+    run: CRMSyncRun | None = None,
 ) -> CRMSyncRun:
     if connection.tenant_id != tenant_id or connection.provider != "hubspot":
         raise ValueError("HubSpot connection is not owned by this tenant")
-    run = CRMSyncRun(tenant_id=tenant_id, connection_id=connection.id, provider="hubspot", requested_resources=list(resources), object_counts={}, event_ids=[])
-    db.add(run)
+    if run is not None and (run.tenant_id != tenant_id or run.connection_id != connection.id):
+        raise ValueError("HubSpot sync run is not owned by this tenant connection")
+    run = run or CRMSyncRun(tenant_id=tenant_id, connection_id=connection.id, provider="hubspot", requested_resources=list(resources), object_counts={}, event_ids=[])
+    if run.id is None:
+        db.add(run)
+    run.status = "running"
     db.commit()
     db.refresh(run)
     counts: dict[str, int] = {}

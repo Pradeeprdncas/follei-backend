@@ -34,7 +34,14 @@ def ensure_topics():
         )
         existing = admin.list_topics()
         topics_to_create = []
-        for t in [_settings.KAFKA_TOPIC_INDEXING, _settings.KAFKA_TOPIC_INDEXING_DLQ, _settings.KAFKA_TOPIC_CHAT]:
+        for t in [
+            _settings.KAFKA_TOPIC_INDEXING,
+            _settings.KAFKA_TOPIC_INDEXING_DLQ,
+            _settings.KAFKA_TOPIC_CHAT,
+            _settings.KAFKA_TOPIC_WEBSITE_INGESTION,
+            _settings.KAFKA_TOPIC_GOOGLE_WORKSPACE_SYNC,
+            _settings.KAFKA_TOPIC_CRM_SYNC,
+        ]:
             if t not in existing:
                 topics_to_create.append(
                     NewTopic(name=t, num_partitions=3, replication_factor=1)

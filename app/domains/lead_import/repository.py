@@ -70,6 +70,7 @@ class LeadImportRepository:
         job.duplicate_rows = duplicate_count + conflict_count
         job.invalid_rows = invalid
         job.statistics = {
+            **(job.statistics or {}),
             "total": total,
             "new": new_count,
             "update": update_count,

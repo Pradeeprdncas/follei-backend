@@ -75,6 +75,7 @@ class LeadImportPreviewResponse(BaseModel):
     statistics: dict[str, Any] | None = None
     total_rows: int = 0
     document_classification: dict[str, Any] | None = None
+    import_policy: dict[str, Any] = Field(default_factory=dict)
     new_rows: list[LeadImportRowPreview] = Field(default_factory=list)
     update_rows: list[LeadImportRowPreview] = Field(default_factory=list)
     duplicate_rows: list[LeadImportRowPreview] = Field(default_factory=list)
@@ -96,6 +97,9 @@ class LeadImportCommitResponse(BaseModel):
     total_duplicates: int = 0
     total_conflicts: int = 0
     total_invalid: int = 0
+    accepted_rows: int = 0
+    rejected_rows: int = 0
+    policy: dict[str, Any] = Field(default_factory=dict)
     message: str
     flow_enrollment: dict | None = None
 

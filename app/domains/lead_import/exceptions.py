@@ -52,3 +52,18 @@ class JobNotReadyError(LeadImportError):
             message=f"Job {job_id} is in status '{current_status}', expected '{required_status}'",
             details={"job_id": job_id, "current_status": current_status, "required_status": required_status},
         )
+
+
+class LeadImportPolicyError(LeadImportError):
+    """The batch remains reviewable but has too few individually valid rows."""
+
+    def __init__(self, *, accepted_rows: int, required_rows: int):
+        super().__init__(
+            message=f"Lead import has {accepted_rows} accepted rows; {required_rows} are required",
+            details={
+                "code": "minimum_accepted_rows_not_met",
+                "accepted_rows": accepted_rows,
+                "minimum_accepted_rows": required_rows,
+                "partial_accept": True,
+            },
+        )

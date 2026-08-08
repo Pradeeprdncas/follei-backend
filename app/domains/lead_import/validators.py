@@ -14,6 +14,20 @@ _WEBSITE_RE = re.compile(
     r"^(https?://)?(www\.)?[a-zA-Z0-9-]+(\.[a-zA-Z]{2,})(/[a-zA-Z0-9\-._~:/?#\[\]@!$&'()*+,;=]*)?$"
 )
 
+MINIMUM_ACCEPTED_LEADS = 50
+MINIMUM_CONTACT_METHODS = 2
+
+
+def lead_import_policy() -> dict[str, Any]:
+    """Public contract: reject bad rows, continue only with 50 accepted rows."""
+    return {
+        "minimum_accepted_rows": MINIMUM_ACCEPTED_LEADS,
+        "minimum_contact_methods": MINIMUM_CONTACT_METHODS,
+        "required_contact_methods": ["email", "phone"],
+        "row_rejection_mode": "individual",
+        "batch_policy": "partial_accept",
+    }
+
 
 def is_valid_email(email: Any) -> bool:
     if not email or not isinstance(email, str):
@@ -48,7 +62,7 @@ def is_blank_row(data: dict[str, Any]) -> bool:
     )
 
 
-def validate_lead_row(extracted: dict[str, Any]) -> list[str]:
+def validate_lead_row(extracted: dict[str, Any], *, minimum_contact_methods: int = MINIMUM_CONTACT_METHODS) -> list[str]:
     """Validate an extracted lead row and return a list of error messages."""
     errors: list[str] = []
 
@@ -58,8 +72,11 @@ def validate_lead_row(extracted: dict[str, Any]) -> list[str]:
 
     email = extracted.get("email")
     phone = extracted.get("phone")
-    if not email and not phone:
-        errors.append("At least one of email or phone is required")
+    contact_methods = sum(bool(value and str(value).strip()) for value in (email, phone))
+    if contact_methods < minimum_contact_methods:
+        errors.append(
+            f"At least {minimum_contact_methods} contact methods are required; provide both email and phone"
+        )
 
     if email and not is_valid_email(email):
         errors.append(f"Invalid email: {email}")

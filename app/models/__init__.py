@@ -12,6 +12,7 @@ from app.models.customers.customer import Customer
 from app.models.integrations.integration import IntegrationConnection
 from app.models.integrations.email_connection import EmailOAuthState, TenantEmailConnection
 from app.models.integrations.channel_connection import ChannelComplianceAcknowledgement, TenantChannelConnection
+from app.models.integrations.oauth_connection import IntegrationOAuthState, GoogleWorkspaceConnection
 from app.models.leads.lead import Lead
 from app.models.campaigns import Campaign
 from app.models.knowledge.knowledge_base import KnowledgeBase
@@ -21,6 +22,8 @@ from app.models.knowledge.fact_draft import BusinessFactDraft
 from app.models.knowledge.entity import Entity, EntityRelation
 from app.models.knowledge.sync_event import KnowledgeSyncEvent
 from app.models.knowledge.indexing_job import IndexingJob
+from app.models.knowledge.ingestion import IngestionRun, SourceIngestionJob, CategorySummary, OnboardingConfirmation
+from app.models.knowledge.document import KnowledgeSource
 from app.models.domain import FAQ, Policy, Procedure, Product, Service, SLA, PricingModel, Competitor, BusinessPlan, CustomerSegment
 from app.models.onboarding_profile import OnboardingProfile
 from app.models.onboarding_contact_channel import OnboardingContactChannel
@@ -29,4 +32,4 @@ from app.models.learning_signal import LearningSignal
 from app.models.flows import FlowDefinition, FlowVersion, FlowEnrollment, FlowExecutionStep, CommunicationAsset, WorkflowTemplate, TenantWorkflowInstance, WorkflowApproval
 from app.models.crm import CRMRecord, CRMSyncRun, TenantCRMConnection
 
-__all__ = ["Tenant", "User", "Agent", "Conversation", "Message", "ConversationCitation", "Interaction", "Customer", "IntegrationConnection", "EmailOAuthState", "TenantEmailConnection", "TenantChannelConnection", "ChannelComplianceAcknowledgement", "Lead", "Campaign", "KnowledgeBase", "Document", "Chunk", "BusinessFactDraft", "Entity", "EntityRelation", "KnowledgeSyncEvent", "IndexingJob", "OnboardingProfile", "OnboardingContactChannel", "OnboardingGoal", "BusinessPlan", "CustomerSegment", "SLA", "LearningSignal", "FlowDefinition", "FlowVersion", "FlowEnrollment", "FlowExecutionStep", "CommunicationAsset", "WorkflowTemplate", "TenantWorkflowInstance", "WorkflowApproval", "TenantCRMConnection", "CRMRecord", "CRMSyncRun"]
+__all__ = ["Tenant", "User", "Agent", "Conversation", "Message", "ConversationCitation", "Interaction", "Customer", "IntegrationConnection", "EmailOAuthState", "TenantEmailConnection", "IntegrationOAuthState", "GoogleWorkspaceConnection", "TenantChannelConnection", "ChannelComplianceAcknowledgement", "Lead", "Campaign", "KnowledgeBase", "KnowledgeSource", "Document", "Chunk", "BusinessFactDraft", "Entity", "EntityRelation", "KnowledgeSyncEvent", "IndexingJob", "IngestionRun", "SourceIngestionJob", "CategorySummary", "OnboardingConfirmation", "OnboardingProfile", "OnboardingContactChannel", "OnboardingGoal", "BusinessPlan", "CustomerSegment", "SLA", "LearningSignal", "FlowDefinition", "FlowVersion", "FlowEnrollment", "FlowExecutionStep", "CommunicationAsset", "WorkflowTemplate", "TenantWorkflowInstance", "WorkflowApproval", "TenantCRMConnection", "CRMRecord", "CRMSyncRun"]

@@ -17,6 +17,8 @@ from app.routers.email_connections import router as email_connections_router
 from app.routers.channel_connections import router as channel_connections_router
 from app.api.campaigns import router as campaigns_router
 from app.routers.crm_sync import router as crm_sync_router
+from app.routers.onboarding_state import router as onboarding_state_router
+from app.routers.google_workspace import router as google_workspace_router
 from app.services.rag.vectorstore.qdrant import ensure_collection
 from app.config.kafka import ensure_topics
 from loguru import logger
@@ -50,7 +52,7 @@ def create_app() -> FastAPI:
         return get_swagger_ui_oauth2_redirect_html()
 
     app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=False, allow_methods=["*"], allow_headers=["*"])
-    for router in (upload_router, chat_router, health_router, knowledge_review_router, orchestrator_router, conversation_memory_router, onboarding_router, channels_email_router, website_ingestion_router, websocket_router, voice_test_router, verification_ui_router, email_connections_router, channel_connections_router, flows_router, assets_router, crm_sync_router):
+    for router in (upload_router, chat_router, health_router, knowledge_review_router, orchestrator_router, conversation_memory_router, onboarding_router, onboarding_state_router, google_workspace_router, channels_email_router, website_ingestion_router, websocket_router, voice_test_router, verification_ui_router, email_connections_router, channel_connections_router, flows_router, assets_router, crm_sync_router):
         app.include_router(router)
     app.include_router(campaigns_router, prefix="/api/v1")
 
