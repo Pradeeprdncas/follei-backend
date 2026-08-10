@@ -108,6 +108,32 @@ def test_public_google_auth_start_accepts_a_truly_empty_request(monkeypatch):
     client.close()
 
 
+def test_public_google_auth_start_treats_blank_tenant_name_as_omitted(monkeypatch):
+    api = FastAPI()
+    api.include_router(google_auth.router)
+    api.dependency_overrides[get_db] = lambda: _DB()
+    client = TestClient(api)
+    captured = {}
+
+    def _authorization_url(*_args, **kwargs):
+        captured.update(kwargs)
+        return "https://accounts.google.test/authorize?state=opaque"
+
+    monkeypatch.setattr(
+        google_auth.GoogleWorkspaceOAuthService,
+        "create_identity_authorization_url",
+        _authorization_url,
+    )
+
+    response = client.post("/api/v1/auth/google/start", json={"tenant_name": ""})
+
+    assert response.status_code == 200
+    assert captured["tenant_name"] is None
+    assert response.json()["data"]["flow"] == "account_auth"
+    assert response.json()["data"]["requires_bearer"] is False
+    client.close()
+
+
 def test_public_google_auth_callback_redirects_one_time_exchange_not_jwts(monkeypatch):
     tenant_id, user_id, connection_id, email_connection_id, run_id = (uuid.uuid4() for _ in range(5))
     job_ids = [uuid.uuid4() for _ in range(4)]

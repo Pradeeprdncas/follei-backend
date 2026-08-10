@@ -246,6 +246,8 @@ const response = await fetch(`${API_ORIGIN}/api/v1/auth/google/start`, {
 ```json
 {
   "data": {
+    "flow": "account_auth",
+    "requires_bearer": false,
     "authorization_url": "https://accounts.google.com/o/oauth2/v2/auth?client_id=…&state=…&nonce=…&code_challenge=…",
     "resources": ["gmail", "drive", "calendar", "contacts"],
     "scopes": [
@@ -266,7 +268,11 @@ const response = await fetch(`${API_ORIGIN}/api/v1/auth/google/start`, {
 }
 ```
 
-`resources` is always all four values for this flow. `authorization_url` includes one-time state, nonce, PKCE, offline access, and `prompt=consent`. `scopes` lists the Workspace and Gmail communication scopes; the URL additionally contains Google's identity scopes.
+`flow=account_auth` and `requires_bearer=false` distinguish this endpoint from
+the authenticated, mid-onboarding connector. `resources` is always all four
+values for this flow. `authorization_url` includes one-time state, nonce, PKCE,
+offline access, and `prompt=consent`. `scopes` lists the Workspace and Gmail
+communication scopes; the URL additionally contains Google's identity scopes.
 
 Errors:
 

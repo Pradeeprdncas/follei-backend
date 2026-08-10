@@ -10,7 +10,7 @@ from uuid import uuid4
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, status
 from fastapi.responses import RedirectResponse
 from loguru import logger
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy.orm import Session
 
 from app.config.database import get_db
@@ -43,7 +43,14 @@ _TOKEN_EXPIRES_IN = 3600
 class GoogleAuthStartRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    tenant_name: str | None = Field(default=None, min_length=1, max_length=200)
+    tenant_name: str | None = Field(default=None, max_length=200)
+
+    @field_validator("tenant_name", mode="before")
+    @classmethod
+    def blank_tenant_name_is_omitted(cls, value):
+        if isinstance(value, str) and not value.strip():
+            return None
+        return value
 
 
 class GoogleAuthExchangeRequest(BaseModel):
@@ -148,6 +155,8 @@ def google_auth_start(
     except GoogleWorkspaceError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     return api_envelope({
+        "flow": "account_auth",
+        "requires_bearer": False,
         "authorization_url": authorization_url,
         "resources": resources,
         "scopes": [
