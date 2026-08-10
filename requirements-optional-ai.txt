@@ -1,0 +1,8 @@
+# Install only for the optional local/voice/analysis profile (`start --full`).
+torch
+transformers
+peft
+soundfile
+librosa
+noisereduce
+gTTS

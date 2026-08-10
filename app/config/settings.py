@@ -47,7 +47,10 @@ class Settings(BaseSettings):
     # keeping model runtime concerns outside the FastAPI worker process.
     LOCAL_LLM_BASE_URL: str = "http://127.0.0.1:8081/v1"
     LOCAL_LLM_MODEL: str = "follei-qwen3-4b"
-    LOCAL_LLM_AUTO_START: bool = True
+    # The canonical knowledge query path uses Mistral. Starting a local
+    # llama.cpp process is an optional legacy/voice profile, never a core API
+    # startup side effect.
+    LOCAL_LLM_AUTO_START: bool = False
     LOCAL_LLM_SERVER_PATH: str = "AI_MODELS/llama.cpp/b10103/llama-server.exe"
     LOCAL_LLM_MODEL_PATH: str = "AI_MODELS/gguf/Qwen3-4B-Instruct-2507-Q4_K_M.gguf"
     LOCAL_LLM_CONTEXT_SIZE: int = 8192

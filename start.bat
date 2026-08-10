@@ -8,13 +8,20 @@ set "COMPOSE=%ROOT%docker-compose.yml"
 set "PORT=8000"
 set "NO_OPEN=0"
 set "NO_PAUSE=0"
-set "SKIP_BROWSER=0"
+set "FULL_PROFILE=0"
+set "NO_INFRA=0"
+set "CHECK_ONLY=0"
+set "INSTALL_BROWSER=0"
 
 :parse_args
 if "%~1"=="" goto :args_done
 if /I "%~1"=="--no-open" set "NO_OPEN=1"
 if /I "%~1"=="--no-pause" set "NO_PAUSE=1"
-if /I "%~1"=="--skip-browser" set "SKIP_BROWSER=1"
+if /I "%~1"=="--full" set "FULL_PROFILE=1"
+if /I "%~1"=="--no-infra" set "NO_INFRA=1"
+if /I "%~1"=="--check" set "CHECK_ONLY=1"
+if /I "%~1"=="--install-browser" set "INSTALL_BROWSER=1"
+if /I "%~1"=="--skip-browser" set "INSTALL_BROWSER=0"
 if /I "%~1"=="--help" goto :help
 shift
 goto :parse_args
@@ -51,29 +58,32 @@ if not exist "%ROOT%scripts\start_local_runtime.ps1" (
   echo [ERROR] scripts\start_local_runtime.ps1 is missing. Services cannot be started.
   goto :failed
 )
-
-if not exist "%ROOT%scripts\run_local_service.bat" (
-  echo [ERROR] scripts\run_local_service.bat is missing. Service tabs cannot be started.
+if not exist "%ROOT%requirements-core.txt" (
+  echo [ERROR] requirements-core.txt is missing.
   goto :failed
 )
 
 echo [1/7] Checking Python dependencies...
-"%PYTHON%" -c "import alembic,fastapi,psycopg2,uvicorn,kafka,qdrant_client,pymongo,boto3,playwright; from app.workers.mail_operations_worker import MailOperationsWorker; from app.workers.flow_execution_worker import run as run_flow_worker; from app.services.communications.gmail_auto_reply import GmailAutoReplyService" >nul 2>&1
+"%PYTHON%" -c "import alembic,fastapi,psycopg2,uvicorn,kafka,qdrant_client,pymongo,boto3,redis; from app.main import app; from app.workers.indexing_consumer import IndexingWorker; from app.workers.knowledge_sync_consumer import KnowledgeSyncWorker; from app.workers.google_workspace_worker import GoogleWorkspaceWorker; from app.workers.website_ingestion_worker import WebsiteIngestionWorker" >nul 2>&1
 if errorlevel 1 (
   echo [INFO] One or more dependencies are missing. Installing requirements...
-  "%PYTHON%" -m pip install -r "%ROOT%requirements.txt"
+  "%PYTHON%" -m pip install -r "%ROOT%requirements-core.txt"
   if errorlevel 1 (
     echo [ERROR] Python dependency installation failed.
     goto :failed
   )
+  if "%FULL_PROFILE%"=="1" "%PYTHON%" -m pip install -r "%ROOT%requirements-optional-ai.txt"
 ) else (
   echo [OK] Python dependencies are available.
 )
+if "%FULL_PROFILE%"=="1" (
+  "%PYTHON%" -c "import torch,transformers,peft,soundfile,librosa,noisereduce,gtts" >nul 2>&1
+  if errorlevel 1 "%PYTHON%" -m pip install -r "%ROOT%requirements-optional-ai.txt"
+  if errorlevel 1 goto :failed
+)
 
 echo [2/7] Checking the website-ingestion browser runtime...
-if "%SKIP_BROWSER%"=="1" (
-  echo [SKIP] Browser runtime check skipped by --skip-browser.
-) else (
+if "%INSTALL_BROWSER%"=="1" (
   "%PYTHON%" -m playwright install chromium >nul
   if errorlevel 1 (
     echo [WARN] Chromium could not be installed. Normal documents and server-rendered
@@ -81,6 +91,14 @@ if "%SKIP_BROWSER%"=="1" (
   ) else (
     echo [OK] Chromium runtime is available.
   )
+) else (
+  echo [SKIP] Browser installation skipped. Use --install-browser for JavaScript-heavy sites.
+)
+
+if "%CHECK_ONLY%"=="1" (
+  call :print_service_plan
+  echo [OK] Runtime check passed; nothing was started.
+  goto :success
 )
 
 echo [3/7] Starting local infrastructure...
@@ -89,12 +107,16 @@ if not errorlevel 1 (
   echo [OK] Required infrastructure is already reachable; skipping Docker Compose.
   goto :infrastructure_started
 )
-where docker >nul 2>&1
-if errorlevel 1 (
-  echo [WARN] Docker CLI was not found. Checking for already-running services.
-) else if exist "%COMPOSE%" (
-  docker compose -p follei-backend-team -f "%COMPOSE%" up -d postgres redis qdrant minio ferretdb-postgres ferretdb zookeeper kafka
-  if errorlevel 1 echo [WARN] Docker Compose reported an error; existing services will still be checked.
+if "%NO_INFRA%"=="1" (
+  echo [SKIP] Docker Compose disabled by --no-infra.
+) else (
+  where docker >nul 2>&1
+  if errorlevel 1 (
+    echo [WARN] Docker CLI was not found. Checking for already-running services.
+  ) else if exist "%COMPOSE%" (
+    docker compose -p follei-backend-team -f "%COMPOSE%" up -d postgres redis qdrant minio ferretdb-postgres ferretdb zookeeper kafka
+    if errorlevel 1 echo [WARN] Docker Compose reported an error; existing services will still be checked.
+  )
 )
 
 :infrastructure_started
@@ -128,25 +150,22 @@ if errorlevel 1 (
 )
 echo [OK] Database schema is current.
 
-echo [6/7] Starting API and all required workers...
-echo [INFO] The unified mail worker handles Gmail auto-replies, scheduled campaigns,
-echo        email outbox delivery, and retry processing. A second Gmail poller is
-echo        intentionally not started because it would process the same inbox twice.
+echo [6/7] Starting the lightweight core services...
 set "OPEN_ARG="
 if "%NO_OPEN%"=="1" set "OPEN_ARG=-NoOpen"
-powershell -NoProfile -ExecutionPolicy Bypass -File "%ROOT%scripts\start_local_runtime.ps1" -Root "%ROOT:~0,-1%" -Python "%PYTHON%" -Port %PORT% %OPEN_ARG%
+set "FULL_ARG="
+if "%FULL_PROFILE%"=="1" set "FULL_ARG=-Full"
+powershell -NoProfile -ExecutionPolicy Bypass -File "%ROOT%scripts\start_local_runtime.ps1" -Root "%ROOT:~0,-1%" -Python "%PYTHON%" -Port %PORT% %OPEN_ARG% %FULL_ARG%
 if errorlevel 1 goto :failed
 
 echo [7/7] Startup complete.
 echo.
-echo Tenant console: http://127.0.0.1:%PORT%/tenant
-echo Flow Builder:   http://127.0.0.1:%PORT%/tenant/flows
-echo Activity monitor: http://127.0.0.1:%PORT%/tenant/activity
-echo Voice console:  http://127.0.0.1:%PORT%/user
+call :print_service_plan
 echo API docs:       http://127.0.0.1:%PORT%/docs
-echo Worker output:  visible in Windows Terminal tabs
+echo Worker output:  %ROOT%logs\runtime
 echo Runtime state:  %ROOT%logs\runtime
 echo.
+:success
 if "%NO_PAUSE%"=="0" pause
 endlocal
 exit /b 0
@@ -155,19 +174,34 @@ exit /b 0
 echo.
 echo ==========================================================
 echo [FAILED] Follei did not start completely.
-echo Review the error above and the Windows Terminal tabs.
+echo Review the error above and logs\runtime\*.err.log.
 echo ==========================================================
 if "%NO_PAUSE%"=="0" pause
 endlocal
 exit /b 1
 
 :help
-echo Usage: start.bat [--no-open] [--no-pause] [--skip-browser]
+echo Usage: start.bat [--full] [--no-infra] [--check] [--install-browser] [--no-open] [--no-pause]
 echo.
-echo   --no-open       Do not open the tenant and voice pages after startup.
+echo   default         API + indexing + knowledge sync + Google sync + website crawl.
+echo   --full          Also start analysis, lead scoring, mail, flow, and HubSpot workers.
+echo   --no-infra      Use externally managed stores and Kafka.
+echo   --check         Validate imports and print the service plan without starting.
+echo   --install-browser  Install Playwright Chromium for JavaScript-heavy sites.
+echo   --no-open       Do not open the API documentation after startup.
 echo   --no-pause      Do not wait for a key press when the script finishes.
-echo   --skip-browser  Skip the Playwright Chromium check for a faster restart.
+echo   --skip-browser  Backward-compatible alias for the light default.
 endlocal
+exit /b 0
+
+:print_service_plan
+echo Core services:
+echo   1. API - OAuth, validation, onboarding checks, retrieval
+echo   2. Indexing worker - parse, classify, chunk, embed
+echo   3. Knowledge-sync worker - FerretDB/Qdrant projection
+echo   4. Google Workspace sync worker
+echo   5. Website ingestion worker
+if "%FULL_PROFILE%"=="1" echo Optional full profile: analysis, lead scoring, mail, flows, HubSpot
 exit /b 0
 
 :find_python

@@ -47,7 +47,7 @@ def upgrade() -> None:
     sa.Column('slug', sa.String(), nullable=True),
     sa.Column('is_active', sa.Boolean(), nullable=False),
     sa.Column('industry', sa.String(), nullable=True),
-    sa.Column('industry_pack_activated', sa.Boolean(), nullable=False),
+    sa.Column('industry_pack_activated', sa.Boolean(), server_default=sa.false(), nullable=False),
     sa.Column('country_region', sa.String(), nullable=True),
     sa.Column('website', sa.String(), nullable=True),
     sa.Column('selected_channels', postgresql.JSONB(astext_type=sa.Text()), nullable=True),

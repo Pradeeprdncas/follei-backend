@@ -1,6 +1,6 @@
 ﻿import uuid
 from datetime import datetime
-from sqlalchemy import Column, String, Boolean, DateTime, ForeignKey, Integer, Uuid
+from sqlalchemy import Column, String, Boolean, DateTime, ForeignKey, Integer, Uuid, false
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import relationship
 
@@ -34,7 +34,7 @@ class Tenant(Base):
     slug = Column(String, index=True, nullable=True)
     is_active = Column(Boolean, default=True, nullable=False)
     industry = Column(String, nullable=True)
-    industry_pack_activated = Column(Boolean, default=False, nullable=False)
+    industry_pack_activated = Column(Boolean, default=False, server_default=false(), nullable=False)
     country_region = Column(String, nullable=True)
     website = Column(String, nullable=True)
     selected_channels = Column(JSONB, nullable=True)

@@ -8,6 +8,8 @@ __pycache__/
 .Python
 uploads/
 logs/
+debug_audio/
+tts_output/
 qdrant_storage/
 kafka-data/
 *.log
