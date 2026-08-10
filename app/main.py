@@ -57,9 +57,17 @@ def create_app() -> FastAPI:
         return get_swagger_ui_oauth2_redirect_html()
 
     allowed_origins = [value.strip() for value in settings.CORS_ALLOWED_ORIGINS.split(",") if value.strip()]
+    local_origin_regex = (
+        r"^https?://(?:localhost|127\.0\.0\.1)(?::[0-9]{1,5})?$"
+        if settings.APP_ENV.strip().lower() in {"development", "dev", "local", "test"}
+        else None
+    )
     app.add_middleware(
         CORSMiddleware,
         allow_origins=allowed_origins,
+        # Vite may move to another port when 5173 is occupied. Loopback is
+        # flexible only outside production; deployed origins remain explicit.
+        allow_origin_regex=local_origin_regex,
         allow_credentials=False,
         allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
         # Origins stay explicit, while frontend libraries may safely add

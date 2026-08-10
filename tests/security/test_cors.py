@@ -11,7 +11,7 @@ def _preflight(origin: str):
             headers={
                 "Origin": origin,
                 "Access-Control-Request-Method": "POST",
-                "Access-Control-Request-Headers": "content-type,x-request-id,idempotency-key",
+                "Access-Control-Request-Headers": "content-type,cache-control,x-request-id,idempotency-key",
             },
         )
 
@@ -25,8 +25,16 @@ def test_vite_localhost_and_loopback_origins_pass_preflight():
         assert "POST" in response.headers["access-control-allow-methods"]
         allowed_headers = response.headers["access-control-allow-headers"].lower()
         assert "content-type" in allowed_headers
+        assert "cache-control" in allowed_headers
         assert "x-request-id" in allowed_headers
         assert "idempotency-key" in allowed_headers
+
+
+def test_development_vite_fallback_port_passes_preflight():
+    response = _preflight("http://127.0.0.1:5199")
+
+    assert response.status_code == 200
+    assert response.headers["access-control-allow-origin"] == "http://127.0.0.1:5199"
 
 
 def test_unconfigured_origin_is_not_allowed():
