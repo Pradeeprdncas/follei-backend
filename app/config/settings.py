@@ -11,7 +11,7 @@ class Settings(BaseSettings):
     APP_ENV: str = "development"
     SECRET_KEY: str = Field(default="change-me", description="JWT / session secret")
     SERVICE_TIMEOUT: int = 60  # default outbound HTTP timeout (seconds)
-    CORS_ALLOWED_ORIGINS: str = "http://localhost:3000,http://127.0.0.1:3000"
+    CORS_ALLOWED_ORIGINS: str = "http://localhost:3000,http://127.0.0.1:3000,http://localhost:5174,http://localhost:5175,http://localhost:5173"
 
     # Ã¢â€â‚¬Ã¢â€â‚¬ PostgreSQL Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
     DATABASE_URL: str = Field(default="postgresql://user:password@localhost:5432/follei")
@@ -197,14 +197,14 @@ class Settings(BaseSettings):
     GMAIL_CLIENT_ID: str = Field(default="")
     GMAIL_CLIENT_SECRET: str = Field(default="")
     GMAIL_OAUTH_REDIRECT_URI: str = Field(
-        default="http://localhost:8000/api/email-connections/gmail/oauth/callback"
+        default="http://127.0.0.1:8000/api/email-connections/gmail/oauth/callback"
     )
-    GMAIL_OAUTH_SUCCESS_URL: str = Field(default="http://localhost:8000/tenant")
+    GMAIL_OAUTH_SUCCESS_URL: str = Field(default="http://127.0.0.1:8000/tenant")
     GOOGLE_WORKSPACE_OAUTH_REDIRECT_URI: str = Field(
-        default="http://localhost:8000/api/v1/integrations/google-workspace/oauth/callback"
+        default="http://127.0.0.1:8000/api/v1/integrations/google-workspace/oauth/callback"
     )
     GOOGLE_AUTH_OAUTH_REDIRECT_URI: str = Field(
-        default="http://localhost:8000/api/v1/auth/google/callback"
+        default="http://127.0.0.1:8000/api/v1/auth/google/callback"
     )
     GMAIL_OAUTH_STATE_TTL_SECONDS: int = 600
     # Optional fallback tenant when an inbound sender matches no known lead.
