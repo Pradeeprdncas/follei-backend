@@ -280,7 +280,10 @@ def test_public_google_auth_denial_redirects_with_sanitized_error():
     assert response.status_code == 302
     location = urlparse(response.headers["location"])
     assert location.path == "/auth/callback"
-    assert parse_qs(location.query) == {"error": ["access_denied"]}
+    assert parse_qs(location.query) == {
+        "error": ["access_denied"],
+        "step": ["authorization"],
+    }
     assert "provider-secret" not in response.headers["location"]
     client.close()
 
@@ -300,7 +303,10 @@ def test_public_google_auth_invalid_callback_redirects_generic_safe_error():
     assert response.status_code == 302
     location = urlparse(response.headers["location"])
     assert location.path == "/auth/callback"
-    assert parse_qs(location.query) == {"error": ["oauth_failed"]}
+    assert parse_qs(location.query) == {
+        "error": ["oauth_failed"],
+        "step": ["authorization"],
+    }
     client.close()
 
 

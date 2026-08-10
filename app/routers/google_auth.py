@@ -195,20 +195,24 @@ async def google_auth_callback(
 ):
     """Provider callback; redirect a short-lived exchange code to the frontend."""
     safe_error = "access_denied" if error == "access_denied" else "oauth_failed"
+    failure_step = "authorization"
     try:
         if error or not state or not code:
             raise GoogleWorkspaceError("Google authorization was not completed")
         service = GoogleWorkspaceOAuthService()
+        failure_step = "token_exchange"
         oauth_state, token_data, identity = await service.complete_identity_authorization(
             db,
             state=state,
             code=code,
         )
+        failure_step = "account_setup"
         user, is_new_user = _account_for_identity(
             db,
             identity=identity,
             requested_tenant_name=str(oauth_state.metadata_.get("tenant_name") or "") or None,
         )
+        failure_step = "workspace_connection"
         connection, run, jobs = service.persist_workspace_connection(
             db,
             tenant_id=user.tenant_id,
@@ -216,6 +220,7 @@ async def google_auth_callback(
             identity=identity,
             resources=list(oauth_state.metadata_.get("resources") or DEFAULT_RESOURCES),
         )
+        failure_step = "gmail_connection"
         email_connection = service.persist_gmail_communication_connection(
             db,
             tenant_id=user.tenant_id,
@@ -228,6 +233,7 @@ async def google_auth_callback(
         )
         background_tasks.add_task(_publish_sync_jobs_safely, connection, run, jobs)
 
+        failure_step = "session_exchange"
         exchange_code = secrets.token_urlsafe(48)
         db.add(OAuthLoginExchange(
             tenant_id=user.tenant_id,
@@ -256,8 +262,12 @@ async def google_auth_callback(
         }
     except Exception as exc:
         db.rollback()
-        logger.warning("Google identity OAuth callback failed: {}", type(exc).__name__)
-        query = {"error": safe_error}
+        logger.warning(
+            "Google identity OAuth callback failed: step={} error_type={}",
+            failure_step,
+            type(exc).__name__,
+        )
+        query = {"error": safe_error, "step": failure_step}
 
     callback_url = f"{_settings.FRONTEND_BASE_URL.rstrip('/')}/auth/callback"
     return RedirectResponse(

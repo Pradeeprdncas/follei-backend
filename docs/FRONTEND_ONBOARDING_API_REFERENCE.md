@@ -308,7 +308,12 @@ HTTP/1.1 302 Found
 Location: https://app.follei.example/auth/callback?error=access_denied
 ```
 
-User cancellation or Google's `access_denied` becomes the fixed safe value `error=access_denied`. Every other failure becomes `error=oauth_failed`, including bad/expired/reused state, provider exchange/identity verification failure, inactive Follei user, missing refresh token, account/connector persistence failure, or queue publication failure. Raw provider error descriptions are discarded. The redirect never contains Google tokens, client secrets, provider authorization codes, or raw provider errors.
+User cancellation or Google's `access_denied` becomes the fixed safe value `error=access_denied`. Every other failure becomes `error=oauth_failed`, including bad/expired/reused state, provider exchange/identity verification failure, inactive Follei user, missing refresh token, or account/connector persistence failure. Queue publication happens after the redirect and cannot fail authentication. Raw provider error descriptions are discarded. The redirect never contains Google tokens, client secrets, provider authorization codes, or raw provider errors.
+
+Failure redirects also include a safe `step` value so the frontend can show a
+useful retry message and support can locate the server-side log. Its enum is
+`authorization`, `token_exchange`, `account_setup`, `workspace_connection`,
+`gmail_connection`, or `session_exchange`. It never contains provider data.
 
 The frontend route `/auth/callback` should read `window.location.search`:
 
