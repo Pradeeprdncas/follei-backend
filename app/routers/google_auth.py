@@ -23,6 +23,7 @@ from app.schemas.api_envelope import api_envelope
 from app.services.flows.service import ensure_default_flow, ensure_tenant_workflow_runtime
 from app.services.integrations.google_workspace import (
     DEFAULT_RESOURCES,
+    GMAIL_COMMUNICATION_SCOPES,
     RESOURCE_SCOPES,
     GoogleWorkspaceError,
     GoogleWorkspaceOAuthService,
@@ -130,7 +131,7 @@ def _publish_sync_jobs(connection, run, jobs) -> None:
 
 @router.post("/start")
 def google_auth_start(payload: GoogleAuthStartRequest, db: Session = Depends(get_db)):
-    """Start identity sign-in and request all supported Workspace read scopes."""
+    """Start public sign-in/signup and request Workspace plus Gmail communication consent."""
     resources = list(DEFAULT_RESOURCES)
     try:
         authorization_url = GoogleWorkspaceOAuthService().create_identity_authorization_url(
@@ -143,7 +144,14 @@ def google_auth_start(payload: GoogleAuthStartRequest, db: Session = Depends(get
     return api_envelope({
         "authorization_url": authorization_url,
         "resources": resources,
-        "scopes": [RESOURCE_SCOPES[item] for item in resources],
+        "scopes": [
+            *(RESOURCE_SCOPES[item] for item in resources),
+            *GMAIL_COMMUNICATION_SCOPES,
+        ],
+        "gmail_communication": {
+            "requested": True,
+            "capabilities": ["send", "reply", "read_inbound"],
+        },
     })
 
 
@@ -177,6 +185,16 @@ async def google_auth_callback(
             identity=identity,
             resources=list(oauth_state.metadata_.get("resources") or DEFAULT_RESOURCES),
         )
+        email_connection = service.persist_gmail_communication_connection(
+            db,
+            tenant_id=user.tenant_id,
+            token_data=token_data,
+            identity=identity,
+            sender_name=getattr(user, "full_name", None) or _full_name(identity),
+            auto_reply_enabled=True,
+            allow_inbound_lead_creation=True,
+            campaign_enabled=True,
+        )
         _publish_sync_jobs(connection, run, jobs)
 
         exchange_code = secrets.token_urlsafe(48)
@@ -193,6 +211,8 @@ async def google_auth_callback(
             "expires_in": _EXCHANGE_TTL_SECONDS,
             "is_new_user": str(is_new_user).lower(),
             "connection_id": str(connection.id),
+            "email_connection_id": str(email_connection.id),
+            "gmail_communication": "connected",
             "run_id": str(run.id),
             "resources": ",".join(oauth_state.metadata_.get("resources") or DEFAULT_RESOURCES),
         }

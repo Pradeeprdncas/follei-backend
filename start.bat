@@ -12,6 +12,7 @@ set "FULL_PROFILE=0"
 set "NO_INFRA=0"
 set "CHECK_ONLY=0"
 set "INSTALL_BROWSER=0"
+set "KEEP_RUNNING=0"
 
 :parse_args
 if "%~1"=="" goto :args_done
@@ -22,6 +23,7 @@ if /I "%~1"=="--no-infra" set "NO_INFRA=1"
 if /I "%~1"=="--check" set "CHECK_ONLY=1"
 if /I "%~1"=="--install-browser" set "INSTALL_BROWSER=1"
 if /I "%~1"=="--skip-browser" set "INSTALL_BROWSER=0"
+if /I "%~1"=="--keep-running" set "KEEP_RUNNING=1"
 if /I "%~1"=="--help" goto :help
 shift
 goto :parse_args
@@ -76,6 +78,9 @@ if errorlevel 1 (
 ) else (
   echo [OK] Python dependencies are available.
 )
+echo [INFO] Effective OAuth redirect URIs:
+"%PYTHON%" -c "from app.config.settings import get_settings; s=get_settings(); print('  GOOGLE_AUTH_OAUTH_REDIRECT_URI=' + s.GOOGLE_AUTH_OAUTH_REDIRECT_URI); print('  GOOGLE_WORKSPACE_OAUTH_REDIRECT_URI=' + s.GOOGLE_WORKSPACE_OAUTH_REDIRECT_URI); print('  GMAIL_OAUTH_REDIRECT_URI=' + s.GMAIL_OAUTH_REDIRECT_URI)"
+if errorlevel 1 goto :failed
 if "%FULL_PROFILE%"=="1" (
   "%PYTHON%" -c "import torch,transformers,peft,soundfile,librosa,noisereduce,gtts" >nul 2>&1
   if errorlevel 1 "%PYTHON%" -m pip install -r "%ROOT%requirements-optional-ai.txt"
@@ -155,7 +160,9 @@ set "OPEN_ARG="
 if "%NO_OPEN%"=="1" set "OPEN_ARG=-NoOpen"
 set "FULL_ARG="
 if "%FULL_PROFILE%"=="1" set "FULL_ARG=-Full"
-powershell -NoProfile -ExecutionPolicy Bypass -File "%ROOT%scripts\start_local_runtime.ps1" -Root "%ROOT:~0,-1%" -Python "%PYTHON%" -Port %PORT% %OPEN_ARG% %FULL_ARG%
+set "KEEP_ARG="
+if "%KEEP_RUNNING%"=="1" set "KEEP_ARG=-KeepRunning"
+powershell -NoProfile -ExecutionPolicy Bypass -File "%ROOT%scripts\start_local_runtime.ps1" -Root "%ROOT:~0,-1%" -Python "%PYTHON%" -Port %PORT% %OPEN_ARG% %FULL_ARG% %KEEP_ARG%
 if errorlevel 1 goto :failed
 
 echo [7/7] Startup complete.
@@ -181,13 +188,14 @@ endlocal
 exit /b 1
 
 :help
-echo Usage: start.bat [--full] [--no-infra] [--check] [--install-browser] [--no-open] [--no-pause]
+echo Usage: start.bat [--full] [--no-infra] [--check] [--install-browser] [--keep-running] [--no-open] [--no-pause]
 echo.
 echo   default         API + indexing + knowledge sync + Google sync + website crawl.
 echo   --full          Also start analysis, lead scoring, mail, flow, and HubSpot workers.
 echo   --no-infra      Use externally managed stores and Kafka.
 echo   --check         Validate imports and print the service plan without starting.
 echo   --install-browser  Install Playwright Chromium for JavaScript-heavy sites.
+echo   --keep-running  Reuse already-running Follei services instead of restarting them.
 echo   --no-open       Do not open the API documentation after startup.
 echo   --no-pause      Do not wait for a key press when the script finishes.
 echo   --skip-browser  Backward-compatible alias for the light default.

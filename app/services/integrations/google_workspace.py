@@ -9,9 +9,11 @@ from urllib.parse import urlencode
 from uuid import UUID, uuid4
 
 import httpx
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.config.settings import get_settings
+from app.models.integrations.email_connection import TenantEmailConnection
 from app.models.integrations.oauth_connection import GoogleWorkspaceConnection, IntegrationOAuthState
 from app.models.knowledge.document import KnowledgeSource
 from app.models.knowledge.ingestion import IngestionRun, SourceIngestionJob
@@ -27,6 +29,10 @@ RESOURCE_SCOPES = {
     "calendar": "https://www.googleapis.com/auth/calendar.readonly",
     "contacts": "https://www.googleapis.com/auth/contacts.readonly",
 }
+GMAIL_COMMUNICATION_SCOPES = (
+    "https://www.googleapis.com/auth/gmail.modify",
+    "https://www.googleapis.com/auth/gmail.send",
+)
 DEFAULT_RESOURCES = tuple(RESOURCE_SCOPES)
 MAX_SYNC_CONTENT_BYTES = 10 * 1024 * 1024
 DRIVE_EXPORT_MIME_TYPES = {
@@ -76,6 +82,7 @@ class GoogleWorkspaceOAuthService:
             resources=resources,
             tenant_id=None,
             user_id=None,
+            extra_scopes=list(GMAIL_COMMUNICATION_SCOPES),
             extra_metadata={"tenant_name": tenant_name.strip() if tenant_name else None},
         )
 
@@ -89,6 +96,7 @@ class GoogleWorkspaceOAuthService:
         tenant_id: UUID | None,
         user_id: UUID | None,
         extra_metadata: dict[str, Any] | None = None,
+        extra_scopes: list[str] | None = None,
     ) -> str:
         selected = list(dict.fromkeys(resources))
         invalid = sorted(set(selected) - set(RESOURCE_SCOPES))
@@ -110,7 +118,13 @@ class GoogleWorkspaceOAuthService:
             expires_at=datetime.utcnow() + timedelta(minutes=10),
         ))
         db.commit()
-        scopes = ["openid", "email", "profile", *(RESOURCE_SCOPES[item] for item in selected)]
+        scopes = list(dict.fromkeys([
+            "openid",
+            "email",
+            "profile",
+            *(RESOURCE_SCOPES[item] for item in selected),
+            *(extra_scopes or []),
+        ]))
         query = urlencode({
             "client_id": self.settings.GMAIL_CLIENT_ID,
             "redirect_uri": redirect_uri,
@@ -244,6 +258,78 @@ class GoogleWorkspaceOAuthService:
         db.add_all([run, *jobs])
         db.commit()
         return connection, run, jobs
+
+    def persist_gmail_communication_connection(
+        self,
+        db: Session,
+        *,
+        tenant_id: UUID,
+        token_data: dict[str, Any],
+        identity: dict[str, Any],
+        sender_name: str | None = None,
+        auto_reply_enabled: bool = True,
+        allow_inbound_lead_creation: bool = True,
+        campaign_enabled: bool = True,
+    ) -> TenantEmailConnection:
+        """Store the Google signup token as the tenant's Gmail send/reply inbox."""
+        access_token = str(token_data.get("access_token") or "")
+        refresh_token = str(token_data.get("refresh_token") or "")
+        email = str(identity.get("email") or "").strip().lower()
+        if not access_token or not email:
+            raise GoogleWorkspaceError("Google Gmail identity is incomplete")
+
+        conflicting = db.query(TenantEmailConnection).filter(
+            TenantEmailConnection.provider == "gmail",
+            TenantEmailConnection.email_address == email,
+            TenantEmailConnection.enabled.is_(True),
+            TenantEmailConnection.tenant_id != tenant_id,
+        ).first()
+        if conflicting:
+            raise GoogleWorkspaceError("This Gmail inbox is already connected to another Follei tenant")
+
+        row = db.query(TenantEmailConnection).filter(
+            TenantEmailConnection.tenant_id == tenant_id,
+            TenantEmailConnection.provider == "gmail",
+            TenantEmailConnection.email_address == email,
+        ).first()
+        if row is None:
+            row = TenantEmailConnection(
+                tenant_id=tenant_id,
+                provider="gmail",
+                email_address=email,
+            )
+            db.add(row)
+
+        if not refresh_token and not row.encrypted_refresh_token:
+            raise GoogleWorkspaceError("Google did not return a refresh token; revoke access and reconnect")
+        row.email_address = email
+        row.sender_name = (sender_name or "Follei").strip() or "Follei"
+        row.auth_type = "oauth"
+        row.encrypted_access_token = encrypt_secret(access_token)
+        if refresh_token:
+            row.encrypted_refresh_token = encrypt_secret(refresh_token)
+        row.access_token_expires_at = datetime.utcnow() + timedelta(
+            seconds=max(60, int(token_data.get("expires_in") or 3600))
+        )
+        row.oauth_scopes = str(token_data.get("scope") or "").split()
+        row.provider_account_id = email
+        row.token_updated_at = datetime.utcnow()
+        row.enabled = True
+        row.verified = True
+        row.auto_reply_enabled = bool(auto_reply_enabled)
+        row.allow_inbound_lead_creation = bool(allow_inbound_lead_creation)
+        row.campaign_enabled = bool(campaign_enabled)
+        row.status = "active"
+        row.last_error = None
+        try:
+            db.commit()
+        except IntegrityError as exc:
+            db.rollback()
+            raise GoogleWorkspaceError(
+                "This Gmail inbox became connected to another Follei tenant; reconnect with a different inbox"
+            ) from exc
+        db.refresh(row)
+        return row
 
     async def valid_access_token(self, db: Session, connection: GoogleWorkspaceConnection) -> str:
         if connection.access_token_expires_at and connection.access_token_expires_at > datetime.utcnow() + timedelta(minutes=2):

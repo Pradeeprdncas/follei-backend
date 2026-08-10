@@ -197,14 +197,14 @@ class Settings(BaseSettings):
     GMAIL_CLIENT_ID: str = Field(default="")
     GMAIL_CLIENT_SECRET: str = Field(default="")
     GMAIL_OAUTH_REDIRECT_URI: str = Field(
-        default="http://127.0.0.1:8000/api/email-connections/gmail/oauth/callback"
+        default="http://localhost:8000/api/email-connections/gmail/oauth/callback"
     )
-    GMAIL_OAUTH_SUCCESS_URL: str = Field(default="http://127.0.0.1:8000/tenant")
+    GMAIL_OAUTH_SUCCESS_URL: str = Field(default="http://localhost:8000/tenant")
     GOOGLE_WORKSPACE_OAUTH_REDIRECT_URI: str = Field(
-        default="http://127.0.0.1:8000/api/v1/integrations/google-workspace/oauth/callback"
+        default="http://localhost:8000/api/v1/integrations/google-workspace/oauth/callback"
     )
     GOOGLE_AUTH_OAUTH_REDIRECT_URI: str = Field(
-        default="http://127.0.0.1:8000/api/v1/auth/google/callback"
+        default="http://localhost:8000/api/v1/auth/google/callback"
     )
     GMAIL_OAUTH_STATE_TTL_SECONDS: int = 600
     # Optional fallback tenant when an inbound sender matches no known lead.

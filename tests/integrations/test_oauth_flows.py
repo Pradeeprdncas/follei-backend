@@ -73,12 +73,18 @@ def test_public_google_auth_start_requests_all_workspace_resources(monkeypatch):
 
     assert response.status_code == 200
     assert response.json()["data"]["resources"] == ["gmail", "drive", "calendar", "contacts"]
+    assert "https://www.googleapis.com/auth/gmail.modify" in response.json()["data"]["scopes"]
+    assert "https://www.googleapis.com/auth/gmail.send" in response.json()["data"]["scopes"]
+    assert response.json()["data"]["gmail_communication"] == {
+        "requested": True,
+        "capabilities": ["send", "reply", "read_inbound"],
+    }
     assert "access_token" not in response.text.lower()
     client.close()
 
 
 def test_public_google_auth_callback_redirects_one_time_exchange_not_jwts(monkeypatch):
-    tenant_id, user_id, connection_id, run_id = (uuid.uuid4() for _ in range(4))
+    tenant_id, user_id, connection_id, email_connection_id, run_id = (uuid.uuid4() for _ in range(5))
     job_ids = [uuid.uuid4() for _ in range(4)]
     db = _DB()
     api = FastAPI()
@@ -91,6 +97,7 @@ def test_public_google_auth_callback_redirects_one_time_exchange_not_jwts(monkey
     identity = {"sub": "google-sub", "email": "maya@example.com", "email_verified": True}
     user = SimpleNamespace(id=user_id, tenant_id=tenant_id)
     connection = SimpleNamespace(id=connection_id, tenant_id=tenant_id)
+    email_connection = SimpleNamespace(id=email_connection_id)
     run = SimpleNamespace(id=run_id, source_id=uuid.uuid4())
     jobs = [
         SimpleNamespace(id=job_id, payload={"resource": resource})
@@ -106,6 +113,11 @@ def test_public_google_auth_callback_redirects_one_time_exchange_not_jwts(monkey
         "persist_workspace_connection",
         lambda *_args, **_kwargs: (connection, run, jobs),
     )
+    monkeypatch.setattr(
+        google_auth.GoogleWorkspaceOAuthService,
+        "persist_gmail_communication_connection",
+        lambda *_args, **_kwargs: email_connection,
+    )
     monkeypatch.setattr(google_auth, "_account_for_identity", lambda *_args, **_kwargs: (user, True))
     monkeypatch.setattr(google_auth, "_publish_sync_jobs", lambda *_args, **_kwargs: None)
 
@@ -118,10 +130,21 @@ def test_public_google_auth_callback_redirects_one_time_exchange_not_jwts(monkey
     location = urlparse(response.headers["location"])
     query = parse_qs(location.query)
     assert location.path == "/auth/callback"
-    assert set(query) == {"exchange_code", "expires_in", "is_new_user", "connection_id", "run_id", "resources"}
+    assert set(query) == {
+        "exchange_code",
+        "expires_in",
+        "is_new_user",
+        "connection_id",
+        "email_connection_id",
+        "gmail_communication",
+        "run_id",
+        "resources",
+    }
     assert query["expires_in"] == ["120"]
     assert query["is_new_user"] == ["true"]
     assert query["connection_id"] == [str(connection_id)]
+    assert query["email_connection_id"] == [str(email_connection_id)]
+    assert query["gmail_communication"] == ["connected"]
     assert query["run_id"] == [str(run_id)]
     assert query["resources"] == ["gmail,drive,calendar,contacts"]
     assert "access_token" not in response.headers["location"].lower()

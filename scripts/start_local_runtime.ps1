@@ -3,7 +3,8 @@ param(
     [Parameter(Mandatory = $true)][string]$Python,
     [int]$Port = 8000,
     [switch]$NoOpen,
-    [switch]$Full
+    [switch]$Full,
+    [switch]$KeepRunning
 )
 
 $ErrorActionPreference = "Stop"
@@ -22,11 +23,20 @@ function Get-FolleiProcesses([string]$Marker) {
 function Start-FolleiService([hashtable]$Service) {
     $existing = Get-FolleiProcesses $Service.Marker
     $pidFile = Join-Path $runtimeDir "$($Service.LogStem).pid"
-    if ($existing.Count -gt 0) {
+    if ($KeepRunning -and $existing.Count -gt 0) {
         $ids = ($existing | ForEach-Object { $_.ProcessId })
         Set-Content -LiteralPath $pidFile -Value ($ids -join "`n")
         Write-Host "[OK] $($Service.Name) already running (PID $($ids -join ', '))."
         return
+    }
+    if ($existing.Count -gt 0) {
+        $ids = ($existing | ForEach-Object { $_.ProcessId })
+        Write-Host "[INFO] Restarting $($Service.Name) (stopping PID $($ids -join ', ')) so code and .env changes are loaded."
+        foreach ($process in $existing) {
+            Stop-Process -Id $process.ProcessId -Force -ErrorAction SilentlyContinue
+        }
+        Remove-Item -LiteralPath $pidFile -Force -ErrorAction SilentlyContinue
+        Start-Sleep -Seconds 1
     }
 
     $outLog = Join-Path $runtimeDir "$($Service.LogStem).out.log"

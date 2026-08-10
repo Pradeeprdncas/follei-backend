@@ -9,16 +9,18 @@ FULL_PROFILE=0
 NO_INFRA=0
 CHECK_ONLY=0
 INSTALL_BROWSER=0
+KEEP_RUNNING=0
 
 usage() {
   cat <<'EOF'
-Usage: ./start.sh [--full] [--no-infra] [--check] [--install-browser]
+Usage: ./start.sh [--full] [--no-infra] [--check] [--install-browser] [--keep-running]
 
   default            API + indexing + knowledge sync + Google sync + website crawl
   --full             Also start analysis, lead scoring, mail, flow, and HubSpot workers
   --no-infra         Do not run Docker Compose; use externally managed infrastructure
   --check            Validate configuration/imports and print the service plan only
   --install-browser  Install Playwright Chromium for JavaScript-heavy website crawling
+  --keep-running     Reuse already-running Follei services instead of restarting them
 EOF
 }
 
@@ -28,6 +30,7 @@ while [[ $# -gt 0 ]]; do
     --no-infra) NO_INFRA=1 ;;
     --check) CHECK_ONLY=1 ;;
     --install-browser) INSTALL_BROWSER=1 ;;
+    --keep-running) KEEP_RUNNING=1 ;;
     --help|-h) usage; exit 0 ;;
     *) echo "[ERROR] Unknown option: $1"; usage; exit 2 ;;
   esac
@@ -77,6 +80,19 @@ if ! check_core_imports >/dev/null 2>&1; then
   "${PYTHON}" -m pip install -r "${ROOT_DIR}/requirements-core.txt"
 fi
 check_core_imports
+
+echo "[INFO] Effective OAuth redirect URIs:"
+(
+  cd "${ROOT_DIR}"
+  "${PYTHON}" - <<'PY'
+from app.config.settings import get_settings
+
+settings = get_settings()
+print(f"  GOOGLE_AUTH_OAUTH_REDIRECT_URI={settings.GOOGLE_AUTH_OAUTH_REDIRECT_URI}")
+print(f"  GOOGLE_WORKSPACE_OAUTH_REDIRECT_URI={settings.GOOGLE_WORKSPACE_OAUTH_REDIRECT_URI}")
+print(f"  GMAIL_OAUTH_REDIRECT_URI={settings.GMAIL_OAUTH_REDIRECT_URI}")
+PY
+)
 
 if [[ "${FULL_PROFILE}" == "1" ]] && ! "${PYTHON}" -c "import torch,transformers,peft,soundfile,librosa,noisereduce,gtts" >/dev/null 2>&1; then
   echo "[INFO] Installing the optional local/voice AI dependencies..."
@@ -134,16 +150,43 @@ is_running() {
   [[ "${pid}" =~ ^[0-9]+$ ]] && kill -0 "${pid}" 2>/dev/null
 }
 
+stop_existing_service() {
+  local name="$1" marker="$2"
+  local pid_file="${RUNTIME_DIR}/${marker}.pid"
+  if ! is_running "${pid_file}"; then
+    return
+  fi
+  local pid
+  pid="$(head -n 1 "${pid_file}")"
+  echo "[INFO] Restarting ${name} (stopping PID ${pid}) so code and .env changes are loaded."
+  kill "${pid}" 2>/dev/null || true
+  for _ in $(seq 1 20); do
+    kill -0 "${pid}" 2>/dev/null || break
+    sleep 0.25
+  done
+  if kill -0 "${pid}" 2>/dev/null; then
+    kill -TERM "${pid}" 2>/dev/null || true
+    sleep 1
+  fi
+  if kill -0 "${pid}" 2>/dev/null; then
+    kill -KILL "${pid}" 2>/dev/null || true
+  fi
+  if [[ -f "${pid_file}" ]]; then
+    mv "${pid_file}" "${pid_file}.previous"
+  fi
+}
+
 start_service() {
   local name="$1" marker="$2"
   shift 2
   local pid_file="${RUNTIME_DIR}/${marker}.pid"
   local out_log="${RUNTIME_DIR}/${marker}.out.log"
   local err_log="${RUNTIME_DIR}/${marker}.err.log"
-  if is_running "${pid_file}"; then
+  if [[ "${KEEP_RUNNING}" == "1" ]] && is_running "${pid_file}"; then
     echo "[OK] ${name} already running (PID $(head -n 1 "${pid_file}"))."
     return
   fi
+  stop_existing_service "${name}" "${marker}"
   (
     cd "${ROOT_DIR}"
     nohup "${PYTHON}" -u "$@" >>"${out_log}" 2>>"${err_log}" &

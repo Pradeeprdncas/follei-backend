@@ -43,8 +43,9 @@ flow is a full-page redirect, not a popup.
 Google returns through `GET /api/v1/auth/google/callback`, and the backend sends
 the browser to the frontend's `/auth/callback` route. On success that URL has a
 short-lived `exchange_code`, `expires_in=120`, `is_new_user`, `connection_id`,
-`run_id`, and `resources=gmail,drive,calendar,contacts`. It never contains a
-Follei token or Google provider token.
+`email_connection_id`, `gmail_communication=connected`, `run_id`, and
+`resources=gmail,drive,calendar,contacts`. It never contains a Follei token or
+Google provider token.
 
 The frontend immediately exchanges the code through
 `POST /api/v1/auth/google/exchange`. Advance only after this returns the normal
@@ -55,9 +56,11 @@ screen and do not call `/exchange`.
 
 For a new Google identity, the callback creates the tenant and admin user. For
 an existing identity, it signs that user in. In both cases it also creates a
-Google Workspace knowledge connection and queues independent Gmail, Drive,
-Calendar, and Contacts ingestion jobs. This is the key difference in step 2:
-the first state response may already contain a Google source and active run.
+Google Workspace knowledge connection, creates the tenant Gmail send/reply
+connection, and queues independent Gmail, Drive, Calendar, and Contacts
+ingestion jobs. This is the key difference in step 2: the first state response
+may already contain a Google source, active run, and a usable Gmail
+communication connection.
 
 ## 2. Establish the Follei session and load the first state
 

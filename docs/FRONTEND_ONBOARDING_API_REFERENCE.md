@@ -218,9 +218,9 @@ Token fields have the meanings described in registration. `user.id` and `user.te
 
 ## 3. Google OAuth registration/sign-in with automatic Workspace connection
 
-This public flow handles both new and returning users. It verifies the Google identity, creates a Follei tenant/user when the email is new, connects that same Google account as a Workspace knowledge source, and queues independent Gmail, Drive, Calendar, and Contacts sync jobs. Provider access and refresh tokens remain encrypted server-side.
+This public flow handles both new and returning users. It verifies the Google identity, creates a Follei tenant/user when the email is new, connects that same Google account as a Workspace knowledge source, creates the tenant Gmail send/reply connection, and queues independent Gmail, Drive, Calendar, and Contacts sync jobs. Provider access and refresh tokens remain encrypted server-side.
 
-This is deliberately a combined identity-and-data-consent flow, not identity-only OAuth. The Google consent screen asks for `openid`, `email`, `profile`, and read-only access to all four Workspace resources.
+This is deliberately a combined identity-and-data-consent flow, not identity-only OAuth. The Google consent screen asks for `openid`, `email`, `profile`, read access to all four Workspace resources, and Gmail communication access for sending, replying, and inbound auto-reply tracking.
 
 ### 3.1 Start Google registration/sign-in
 
@@ -249,15 +249,21 @@ Unknown fields are rejected.
       "https://www.googleapis.com/auth/gmail.readonly",
       "https://www.googleapis.com/auth/drive.readonly",
       "https://www.googleapis.com/auth/calendar.readonly",
-      "https://www.googleapis.com/auth/contacts.readonly"
-    ]
+      "https://www.googleapis.com/auth/contacts.readonly",
+      "https://www.googleapis.com/auth/gmail.modify",
+      "https://www.googleapis.com/auth/gmail.send"
+    ],
+    "gmail_communication": {
+      "requested": true,
+      "capabilities": ["send", "reply", "read_inbound"]
+    }
   },
   "meta": {"request_id":"<uuid>","generated_at":"<ISO-8601>"},
   "errors": []
 }
 ```
 
-`resources` is always all four values for this flow. `authorization_url` includes one-time state, nonce, PKCE, offline access, and `prompt=consent`. `scopes` lists the four data scopes; the URL additionally contains Google's identity scopes.
+`resources` is always all four values for this flow. `authorization_url` includes one-time state, nonce, PKCE, offline access, and `prompt=consent`. `scopes` lists the Workspace and Gmail communication scopes; the URL additionally contains Google's identity scopes.
 
 Errors:
 
@@ -281,10 +287,10 @@ Success:
 
 ```http
 HTTP/1.1 302 Found
-Location: https://app.follei.example/auth/callback?exchange_code=QF98vS…&expires_in=120&is_new_user=true&connection_id=167f9aed-22b7-4de8-b062-a69687f94c77&run_id=80cb66ce-0137-4548-9b8f-45d4a77a50a0&resources=gmail%2Cdrive%2Ccalendar%2Ccontacts
+Location: https://app.follei.example/auth/callback?exchange_code=QF98vS…&expires_in=120&is_new_user=true&connection_id=167f9aed-22b7-4de8-b062-a69687f94c77&email_connection_id=32afcc62-9ec7-41a9-8c55-332098a81d5f&gmail_communication=connected&run_id=80cb66ce-0137-4548-9b8f-45d4a77a50a0&resources=gmail%2Cdrive%2Ccalendar%2Ccontacts
 ```
 
-Query fields are all strings. `exchange_code` is a one-use credential valid for 120 seconds; exchange it immediately and never log/store it. `expires_in` is `"120"`. `is_new_user` is `"true"` or `"false"`. `connection_id` is the created/reused Workspace connection. `run_id` identifies the ingestion run, which already contains four independently queued jobs. `resources` is one comma-separated value: `gmail,drive,calendar,contacts`.
+Query fields are all strings. `exchange_code` is a one-use credential valid for 120 seconds; exchange it immediately and never log/store it. `expires_in` is `"120"`. `is_new_user` is `"true"` or `"false"`. `connection_id` is the created/reused Workspace knowledge connection. `email_connection_id` is the created/reused tenant Gmail communication connection. `gmail_communication=connected` means backend-side sending, replies, campaigns, and inbound auto-reply tracking were authorized. `run_id` identifies the ingestion run, which already contains four independently queued jobs. `resources` is one comma-separated value: `gmail,drive,calendar,contacts`.
 
 Failure, including user cancellation:
 
@@ -301,7 +307,7 @@ The frontend route `/auth/callback` should read `window.location.search`:
 2. If `exchange_code` exists, remove or replace the URL immediately so browser history, screenshots, and analytics do not retain it.
 3. Call `/api/v1/auth/google/exchange` with that code.
 4. Store the returned Follei session, then use `is_new_user` to select onboarding versus the existing workspace.
-5. Retain `connection_id`, `run_id`, and split `resources` on commas if the UI needs sync progress.
+5. Retain `connection_id`, `email_connection_id`, `gmail_communication`, `run_id`, and split `resources` on commas if the UI needs sync progress.
 
 ### 3.3 Exchange redirect code for Follei session
 
