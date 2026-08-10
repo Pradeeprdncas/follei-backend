@@ -30,6 +30,7 @@ def _draft_to_item(draft: BusinessFactDraft) -> dict:
         "citation": draft.citation,
         "extraction_confidence": float(draft.extraction_confidence) if draft.extraction_confidence is not None else None,
         "approval_status": draft.approval_status,
+        "review_status": draft.item_review_status or "pending",
         "created_at": draft.created_at,
     }
 

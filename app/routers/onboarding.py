@@ -25,6 +25,8 @@ from app.repositories.onboarding_goal import OnboardingGoalRepository
 from app.repositories.user import UserRepository
 from app.services.knowledge.document_status import list_document_statuses
 from app.services.knowledge.extraction_review import group_extractions_by_category
+from app.services.knowledge.categories import canonical_taxonomy_key
+from app.services.knowledge.category_summaries import refresh_review_progress
 from app.services.knowledge.memory_store import seed_onboarding_context
 
 router = APIRouter(prefix="/api/v1/onboarding", tags=["onboarding"])
@@ -374,7 +376,10 @@ def edit_extraction_draft(
     if draft.approval_status != "draft":
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=f"Fact draft is already {draft.approval_status}; only drafts can be edited")
     draft.payload = body.payload
+    draft.item_review_status = "edited"
+    draft.reviewed_at = datetime.utcnow()
     db.commit()
+    refresh_review_progress(db, draft.tenant_id, canonical_taxonomy_key(draft.fact_type))
     db.refresh(draft)
     return {
         "id": str(draft.id),
@@ -382,6 +387,7 @@ def edit_extraction_draft(
         "payload": draft.payload,
         "citation": draft.citation,
         "approval_status": draft.approval_status,
+        "review_status": draft.item_review_status,
     }
 
 

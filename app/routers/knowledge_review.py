@@ -10,6 +10,8 @@ from app.database.session import get_db
 from app.models.knowledge.fact_draft import BusinessFactDraft
 from app.services.knowledge.fact_publishing import publish_fact_draft
 from app.services.knowledge.fact_extraction import validate_fact_payload
+from app.services.knowledge.categories import canonical_taxonomy_key
+from app.services.knowledge.category_summaries import refresh_review_progress
 from app.services.knowledge.graph import sync_approved_fact_to_graph, supersede_fact_in_graph
 from app.services.knowledge.outbox import enqueue_sync_event
 from app.core.security import get_authenticated_tenant_id, require_matching_tenant
@@ -52,6 +54,7 @@ def _draft_response(draft: BusinessFactDraft) -> dict:
         "citation": draft.citation,
         "extraction_confidence": float(draft.extraction_confidence) if draft.extraction_confidence is not None else None,
         "approval_status": draft.approval_status,
+        "review_status": draft.item_review_status or "pending",
         "reviewer": draft.reviewer,
         "review_reason": draft.review_reason,
         "published_record_type": draft.published_record_type,
@@ -116,9 +119,12 @@ def update_fact_draft(
     if validation_error:
         raise HTTPException(status_code=422, detail=validation_error)
     draft.payload = dict(action.payload)
+    draft.item_review_status = "edited"
     draft.reviewer = action.reviewer
     draft.review_reason = action.reason
+    draft.reviewed_at = datetime.utcnow()
     db.commit()
+    refresh_review_progress(db, draft.tenant_id, canonical_taxonomy_key(draft.fact_type))
     db.refresh(draft)
     return _draft_response(draft)
 
@@ -145,6 +151,7 @@ def approve_fact_draft(
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     draft.approval_status = "approved"
+    draft.item_review_status = "approved"
     draft.reviewer = action.reviewer
     draft.review_reason = action.reason
     draft.reviewed_at = datetime.utcnow()
@@ -174,6 +181,7 @@ def approve_fact_draft(
         },
     )
     db.commit()
+    refresh_review_progress(db, draft.tenant_id, canonical_taxonomy_key(draft.fact_type))
     db.refresh(draft)
     return _draft_response(draft)
 
@@ -195,10 +203,12 @@ def reject_fact_draft(
     if draft.approval_status != "draft":
         raise HTTPException(status_code=409, detail=f"Fact draft is already {draft.approval_status}")
     draft.approval_status = "rejected"
+    draft.item_review_status = "rejected"
     draft.reviewer = action.reviewer
     draft.review_reason = action.reason
     draft.reviewed_at = datetime.utcnow()
     db.commit()
+    refresh_review_progress(db, draft.tenant_id, canonical_taxonomy_key(draft.fact_type))
     db.refresh(draft)
     return _draft_response(draft)
 
@@ -281,6 +291,7 @@ def resolve_fact_conflict(payload: ConflictResolution, db: Session = Depends(get
     for record_id in payload.superseded_fact_ids:
         draft = by_record[record_id]
         draft.approval_status = "superseded"
+        draft.item_review_status = "rejected"
         draft.reviewer = payload.reviewer
         draft.review_reason = payload.reason
         draft.reviewed_at = datetime.utcnow()

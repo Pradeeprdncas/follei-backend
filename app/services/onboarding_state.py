@@ -20,20 +20,36 @@ def _category_rows(db: Session, tenant_id: uuid.UUID) -> list[dict[str, object]]
         row.category_key: row
         for row in db.query(CategorySummary).filter(CategorySummary.tenant_id == tenant_id).all()
     }
-    return [
-        {
+    rows: list[dict[str, object]] = []
+    for definition in CATEGORY_DEFINITIONS:
+        stored_row = stored.get(definition.key)
+        mode = stored_row.display_mode if stored_row else "enumerable"
+        count = stored_row.item_count if stored_row else 0
+        display: dict[str, object] = {"mode": mode}
+        if mode == "aggregate":
+            display.update({
+                "breakdown": list(stored_row.breakdown or []) if stored_row else [],
+                "sample_items": list(stored_row.sample_items or []) if stored_row else [],
+            })
+        else:
+            reviewed = min(stored_row.reviewed_count or 0, count) if stored_row else 0
+            display.update({
+                "items_endpoint": f"/api/v1/onboarding/categories/{definition.key}/items",
+                "review_progress": {"reviewed": reviewed, "total": count},
+            })
+        rows.append({
             "key": definition.key,
             "label": definition.label,
             "category_group": definition.group,
             "mandatory_group": definition.mandatory_group,
-            "status": stored[definition.key].status if definition.key in stored else "missing",
-            "count": stored[definition.key].item_count if definition.key in stored else 0,
-            "summary": stored[definition.key].summary if definition.key in stored else None,
-            "confidence": float(stored[definition.key].confidence) if definition.key in stored and stored[definition.key].confidence is not None else None,
-            "needs_review": stored[definition.key].needs_review if definition.key in stored else False,
-        }
-        for definition in CATEGORY_DEFINITIONS
-    ]
+            "status": stored_row.status if stored_row else "missing",
+            "count": count,
+            "summary": stored_row.summary if stored_row else None,
+            "confidence": float(stored_row.confidence) if stored_row and stored_row.confidence is not None else None,
+            "needs_review": stored_row.needs_review if stored_row else False,
+            "display": display,
+        })
+    return rows
 
 
 def evaluate_readiness(

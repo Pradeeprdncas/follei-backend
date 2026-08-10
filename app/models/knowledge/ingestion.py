@@ -58,6 +58,10 @@ class CategorySummary(Base):
     summary = Column(Text, nullable=True)
     confidence = Column(Numeric(4, 3), nullable=True)
     needs_review = Column(Boolean, nullable=False, default=False)
+    display_mode = Column(String(16), nullable=False, default="enumerable")
+    breakdown = Column(JSONB, nullable=False, default=list)
+    sample_items = Column(JSONB, nullable=False, default=list)
+    reviewed_count = Column(Integer, nullable=False, default=0)
     updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     __table_args__ = (

@@ -21,6 +21,9 @@ class BusinessFactDraft(Base):
     citation = Column(JSON, nullable=False, default=dict)
     extraction_confidence = Column(Numeric(4, 3), nullable=True)
     approval_status = Column(String(24), nullable=False, default="draft", index=True)
+    # UI review state is deliberately separate from publication approval. An
+    # edited fact remains a draft until it is explicitly approved.
+    item_review_status = Column(String(16), nullable=False, default="pending", index=True)
     reviewer = Column(String(120), nullable=True)
     review_reason = Column(Text, nullable=True)
     published_record_type = Column(String(64), nullable=True)

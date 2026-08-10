@@ -48,6 +48,7 @@ class CategoryDefinition:
     group: str
     label: str
     mandatory_group: str | None = None
+    force_review_mode: str | None = None
 
 
 _GROUPS: dict[str, tuple[tuple[str, str], ...]] = {
@@ -120,9 +121,24 @@ CATEGORY_CONFIGS = {
             "ordered_steps" if item.key.endswith("process") else "layout"
         ),
         "instruction": f"Preserve tenant-specific {item.label.lower()} and source provenance.",
+        "force_review_mode": item.force_review_mode,
     }
     for item in CATEGORY_DEFINITIONS
 }
+
+# Listings and contracts are reserved for industry taxonomy extensions. Keeping
+# their overrides here makes the behavior deterministic as soon as such a pack
+# emits those keys, without expanding the canonical 25-category base contract.
+FORCED_REVIEW_MODES: dict[str, str] = {
+    "policies_terms": "enumerable",
+    "policies": "enumerable",
+    "listings": "enumerable",
+    "contracts": "enumerable",
+    "pricing_packages": "enumerable",
+    "pricing": "enumerable",
+}
+for key in ("policies_terms", "pricing_packages"):
+    CATEGORY_CONFIGS[key]["force_review_mode"] = "enumerable"
 CATEGORY_CONFIGS["general"] = {
     "group": "uncategorized", "label": "General", "mandatory_group": None,
     "entity_type": "general", "chunking_hint": "layout",
@@ -157,6 +173,21 @@ def fact_type_for_category(category: str) -> str:
     }.get(normalized, normalized.rstrip("s"))
 
 
+def fact_types_for_category(category: str) -> tuple[str, ...]:
+    """Return extractor fact types projected into one canonical category."""
+    canonical = canonical_taxonomy_key(category)
+    candidates = {
+        fact_type_for_category(canonical),
+        canonical,
+        canonical.rstrip("s"),
+    }
+    candidates.update(
+        alias for alias in _ALIASES
+        if canonical_taxonomy_key(alias) == canonical
+    )
+    return tuple(sorted(candidates))
+
+
 def canonical_taxonomy_key(value: str | None) -> str:
     normalized = normalize_category(value)
     return {
@@ -166,6 +197,21 @@ def canonical_taxonomy_key(value: str | None) -> str:
     }.get(normalized, normalized)
 
 
+def review_mode_for_category(category: str, item_count: int, *, threshold: int) -> str:
+    """Resolve display mode from an explicit taxonomy override or item count."""
+    normalized = str(category).strip().lower().replace("-", "_").replace(" ", "_")
+    try:
+        normalized = canonical_taxonomy_key(normalized)
+    except ValueError:
+        # Industry-pack keys may be registered after the base taxonomy. Review
+        # overrides are intentionally usable before that registration happens.
+        pass
+    forced = FORCED_REVIEW_MODES.get(normalized)
+    if forced:
+        return forced
+    return "enumerable" if item_count <= threshold else "aggregate"
+
+
 def taxonomy_payload() -> list[dict[str, object]]:
     """Stable, display-ready taxonomy contract for clients."""
     return [
@@ -173,6 +219,7 @@ def taxonomy_payload() -> list[dict[str, object]]:
             "key": item.key, "label": item.label, "group": item.group,
             "mandatory": item.mandatory_group is not None,
             "mandatory_group": item.mandatory_group,
+            "force_review_mode": CATEGORY_CONFIGS[item.key].get("force_review_mode"),
         }
         for item in CATEGORY_DEFINITIONS
     ]

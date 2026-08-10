@@ -58,6 +58,7 @@ def test_edit_updates_payload_and_stays_draft(seeded_draft):
     body = resp.json()
     assert body["payload"]["price"] == 1099
     assert body["approval_status"] == "draft"
+    assert body["review_status"] == "edited"
 
 
 def test_edited_then_approved_publishes_the_edited_value(seeded_draft):
@@ -75,6 +76,7 @@ def test_edited_then_approved_publishes_the_edited_value(seeded_draft):
     assert resp.status_code == 200
     assert resp.json()["payload"]["price"] == 1099
     assert resp.json()["approval_status"] == "approved"
+    assert resp.json()["review_status"] == "approved"
 
 
 def test_cannot_edit_an_already_approved_draft(seeded_draft):

@@ -42,6 +42,12 @@ class Settings(BaseSettings):
     MISTRAL_API_BASE: str = "https://api.mistral.ai/v1"
     MISTRAL_REQUEST_TIMEOUT_SECONDS: float = 60.0
     MISTRAL_EMBEDDING_BATCH_SIZE: int = 32
+    ENUMERABLE_THRESHOLD: int = Field(
+        default=25,
+        ge=1,
+        le=10_000,
+        description="Maximum category item count rendered as individually reviewable items by default.",
+    )
     AI_MODELS: str = Field(default="AI_MODELS", description="Canonical local AI model root")
     # Local response generation. llama.cpp exposes an OpenAI-compatible API,
     # keeping model runtime concerns outside the FastAPI worker process.
