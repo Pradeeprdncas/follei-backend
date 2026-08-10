@@ -258,6 +258,10 @@ class GoogleWorkspaceOAuthService:
                 source_type="google_workspace", status="queued", config={"account": email, "resources": selected},
             )
             db.add(source)
+            # The connection is populated with source.id directly rather than
+            # through an ORM relationship, so explicitly materialize the FK
+            # target before SQLAlchemy inserts the connection row.
+            db.flush([source])
         if connection is None:
             connection = GoogleWorkspaceConnection(
                 tenant_id=tenant_id, provider_account_id=subject, email_address=email,
