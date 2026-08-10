@@ -24,7 +24,8 @@ Recommended local `.env` values:
 GOOGLE_AUTH_OAUTH_REDIRECT_URI=http://localhost:8000/api/v1/auth/google/callback
 GOOGLE_WORKSPACE_OAUTH_REDIRECT_URI=http://localhost:8000/api/v1/integrations/google-workspace/oauth/callback
 GMAIL_OAUTH_REDIRECT_URI=http://localhost:8000/api/email-connections/gmail/oauth/callback
-FRONTEND_BASE_URL=http://localhost:3000
+FRONTEND_BASE_URL=http://localhost:5173
+CORS_ALLOWED_ORIGINS=http://localhost:5173,http://127.0.0.1:5173
 ```
 
 Restart the backend after changing `.env`. Both startup scripts print the

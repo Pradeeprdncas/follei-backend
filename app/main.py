@@ -62,7 +62,10 @@ def create_app() -> FastAPI:
         allow_origins=allowed_origins,
         allow_credentials=False,
         allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-        allow_headers=["Authorization", "Content-Type", "X-Webhook-Secret"],
+        # Origins stay explicit, while frontend libraries may safely add
+        # non-credential headers such as Accept, Idempotency-Key, or tracing
+        # identifiers without causing a local-development preflight failure.
+        allow_headers=["*"],
     )
     for router in (upload_router, chat_router, health_router, knowledge_review_router, orchestrator_router, conversation_memory_router, onboarding_router, onboarding_state_router, google_auth_router, google_workspace_router, knowledge_query_router, channels_email_router, website_ingestion_router, websocket_router, voice_test_router, verification_ui_router, email_connections_router, channel_connections_router, flows_router, assets_router, crm_sync_router):
         app.include_router(router)
