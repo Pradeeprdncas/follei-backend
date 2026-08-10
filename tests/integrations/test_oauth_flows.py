@@ -83,6 +83,31 @@ def test_public_google_auth_start_requests_all_workspace_resources(monkeypatch):
     client.close()
 
 
+def test_public_google_auth_start_accepts_a_truly_empty_request(monkeypatch):
+    api = FastAPI()
+    api.include_router(google_auth.router)
+    api.dependency_overrides[get_db] = lambda: _DB()
+    client = TestClient(api)
+    captured = {}
+
+    def _authorization_url(*_args, **kwargs):
+        captured.update(kwargs)
+        return "https://accounts.google.test/authorize?state=opaque"
+
+    monkeypatch.setattr(
+        google_auth.GoogleWorkspaceOAuthService,
+        "create_identity_authorization_url",
+        _authorization_url,
+    )
+
+    response = client.post("/api/v1/auth/google/start")
+
+    assert response.status_code == 200
+    assert captured["tenant_name"] is None
+    assert response.json()["data"]["authorization_url"].startswith("https://accounts.google.test/")
+    client.close()
+
+
 def test_public_google_auth_callback_redirects_one_time_exchange_not_jwts(monkeypatch):
     tenant_id, user_id, connection_id, email_connection_id, run_id = (uuid.uuid4() for _ in range(5))
     job_ids = [uuid.uuid4() for _ in range(4)]
@@ -151,6 +176,13 @@ def test_public_google_auth_callback_redirects_one_time_exchange_not_jwts(monkey
     assert "refresh_token" not in response.headers["location"].lower()
     assert "provider-code" not in response.headers["location"]
     assert len(db.added) == 1
+    assert db.added[0].context == {
+        "is_new_user": True,
+        "workspace_connection_id": str(connection_id),
+        "email_connection_id": str(email_connection_id),
+        "run_id": str(run_id),
+        "resources": ["gmail", "drive", "calendar", "contacts"],
+    }
     client.close()
 
 

@@ -7,7 +7,7 @@ from datetime import datetime, timedelta
 from urllib.parse import urlencode
 from uuid import uuid4
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Body, Depends, HTTPException, Query, status
 from fastapi.responses import RedirectResponse
 from loguru import logger
 from pydantic import BaseModel, ConfigDict, Field
@@ -18,6 +18,9 @@ from app.config.kafka import ensure_topics, get_producer
 from app.config.settings import get_settings
 from app.core.security import create_access_token, hash_password
 from app.models.integrations.oauth_connection import OAuthLoginExchange
+from app.models.integrations.oauth_connection import GoogleWorkspaceConnection
+from app.models.integrations.email_connection import TenantEmailConnection
+from app.models.knowledge.ingestion import IngestionRun
 from app.models.tenancy import Tenant, User
 from app.schemas.api_envelope import api_envelope
 from app.services.flows.service import ensure_default_flow, ensure_tenant_workflow_runtime
@@ -130,14 +133,17 @@ def _publish_sync_jobs(connection, run, jobs) -> None:
 
 
 @router.post("/start")
-def google_auth_start(payload: GoogleAuthStartRequest, db: Session = Depends(get_db)):
+def google_auth_start(
+    payload: GoogleAuthStartRequest | None = Body(default=None),
+    db: Session = Depends(get_db),
+):
     """Start public sign-in/signup and request Workspace plus Gmail communication consent."""
     resources = list(DEFAULT_RESOURCES)
     try:
         authorization_url = GoogleWorkspaceOAuthService().create_identity_authorization_url(
             db,
             resources=resources,
-            tenant_name=payload.tenant_name,
+            tenant_name=payload.tenant_name if payload else None,
         )
     except GoogleWorkspaceError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -203,6 +209,13 @@ async def google_auth_callback(
             user_id=user.id,
             provider="google",
             code_hash=state_hash(exchange_code),
+            context={
+                "is_new_user": is_new_user,
+                "workspace_connection_id": str(connection.id),
+                "email_connection_id": str(email_connection.id),
+                "run_id": str(run.id),
+                "resources": list(oauth_state.metadata_.get("resources") or DEFAULT_RESOURCES),
+            },
             expires_at=datetime.utcnow() + timedelta(seconds=_EXCHANGE_TTL_SECONDS),
         ))
         db.commit()
@@ -230,7 +243,7 @@ async def google_auth_callback(
 
 @router.post("/exchange")
 def exchange_google_login(payload: GoogleAuthExchangeRequest, db: Session = Depends(get_db)):
-    """Consume the popup code once and issue the normal Follei token/session shape."""
+    """Consume the redirect exchange code and return session plus safe sync state."""
     row = db.query(OAuthLoginExchange).filter(
         OAuthLoginExchange.code_hash == state_hash(payload.exchange_code),
         OAuthLoginExchange.provider == "google",
@@ -243,6 +256,25 @@ def exchange_google_login(payload: GoogleAuthExchangeRequest, db: Session = Depe
 
     row.consumed_at = datetime.utcnow()
     user.last_login_at = datetime.utcnow()
+    context = row.context or {}
+    workspace_connection = None
+    email_connection = None
+    ingestion_run = None
+    if context.get("workspace_connection_id"):
+        workspace_connection = db.query(GoogleWorkspaceConnection).filter(
+            GoogleWorkspaceConnection.id == context["workspace_connection_id"],
+            GoogleWorkspaceConnection.tenant_id == row.tenant_id,
+        ).first()
+    if context.get("email_connection_id"):
+        email_connection = db.query(TenantEmailConnection).filter(
+            TenantEmailConnection.id == context["email_connection_id"],
+            TenantEmailConnection.tenant_id == row.tenant_id,
+        ).first()
+    if context.get("run_id"):
+        ingestion_run = db.query(IngestionRun).filter(
+            IngestionRun.id == context["run_id"],
+            IngestionRun.tenant_id == row.tenant_id,
+        ).first()
     db.commit()
     return {
         "access_token": create_access_token(user.id, user.tenant_id),
@@ -255,5 +287,25 @@ def exchange_google_login(payload: GoogleAuthExchangeRequest, db: Session = Depe
             "full_name": user.full_name or f"{user.first_name} {user.last_name}".strip(),
             "tenant_id": str(user.tenant_id),
             "roles": [user.role] if user.role else [],
+        },
+        "account": {
+            "is_new_user": bool(context.get("is_new_user", False)),
+            "action": "created" if context.get("is_new_user") else "signed_in",
+        },
+        "google_workspace": {
+            "connection_id": str(workspace_connection.id) if workspace_connection else context.get("workspace_connection_id"),
+            "email_address": workspace_connection.email_address if workspace_connection else user.email,
+            "status": workspace_connection.status if workspace_connection else "connected",
+            "resources": list(context.get("resources") or []),
+        },
+        "gmail_communication": {
+            "connection_id": str(email_connection.id) if email_connection else context.get("email_connection_id"),
+            "status": email_connection.status if email_connection else "connected",
+            "capabilities": ["send", "reply", "read_inbound"],
+        },
+        "ingestion": {
+            "run_id": str(ingestion_run.id) if ingestion_run else context.get("run_id"),
+            "status": ingestion_run.status if ingestion_run else "queued",
+            "state_endpoint": "/api/v1/onboarding/state",
         },
     }

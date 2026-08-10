@@ -28,7 +28,7 @@ class IntegrationOAuthState(Base):
 
 
 class OAuthLoginExchange(Base):
-    """Short-lived, one-use bridge from an OAuth popup to Follei JWTs."""
+    """Short-lived, one-use bridge from Google OAuth to Follei JWTs."""
 
     __tablename__ = "oauth_login_exchanges"
 
@@ -37,6 +37,9 @@ class OAuthLoginExchange(Base):
     user_id = Column(Uuid(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
     provider = Column(String(32), nullable=False, index=True)
     code_hash = Column(String(64), nullable=False, unique=True, index=True)
+    # Safe, frontend-facing identifiers/status only. Provider tokens and
+    # authorization codes must never be stored in this payload.
+    context = Column(JSONB, nullable=False, default=dict)
     expires_at = Column(DateTime, nullable=False, index=True)
     consumed_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow)

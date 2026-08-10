@@ -34,6 +34,10 @@ def test_google_exchange_issues_session_once_and_never_returns_provider_tokens()
             user_id=UUID(registered["user_id"]),
             provider="google",
             code_hash=state_hash(code),
+            context={
+                "is_new_user": False,
+                "resources": ["gmail", "drive", "calendar", "contacts"],
+            },
             expires_at=datetime.utcnow() + timedelta(minutes=2),
         ))
         db.commit()
@@ -46,6 +50,9 @@ def test_google_exchange_issues_session_once_and_never_returns_provider_tokens()
         assert first.json()["user"]["tenant_id"] == str(tenant_id)
         assert "access_token" in first.json()
         assert "refresh_token" in first.json()
+        assert first.json()["account"] == {"is_new_user": False, "action": "signed_in"}
+        assert first.json()["google_workspace"]["resources"] == ["gmail", "drive", "calendar", "contacts"]
+        assert first.json()["ingestion"]["state_endpoint"] == "/api/v1/onboarding/state"
         serialized = first.text.lower()
         assert "provider_access_token" not in serialized
         assert "provider_refresh_token" not in serialized

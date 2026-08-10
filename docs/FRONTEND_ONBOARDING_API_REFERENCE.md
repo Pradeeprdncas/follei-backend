@@ -226,7 +226,8 @@ This is deliberately a combined identity-and-data-consent flow, not identity-onl
 
 `POST /api/v1/auth/google/start` — public; do not send a bearer token.
 
-The JSON body is required; `{}` is valid.
+The request body is optional. The recommended sign-in/sign-up call sends no
+body at all. `{}` and an optional `tenant_name` object are also accepted.
 
 | Field | Required | Type/validation | Example | Meaning |
 |---|---:|---|---|---|
@@ -234,8 +235,10 @@ The JSON body is required; `{}` is valid.
 
 Unknown fields are rejected.
 
-```json
-{"tenant_name":"Northstar Labs"}
+```ts
+const response = await fetch(`${API_ORIGIN}/api/v1/auth/google/start`, {
+  method: 'POST'
+});
 ```
 
 `200 OK`:
@@ -270,7 +273,7 @@ Errors:
 | Status | Body/cause |
 |---|---|
 | `422` | `{"detail":"Google OAuth client ID/secret are not configured"}` when backend Google credentials are absent. |
-| `422` | Standard validation array for a malformed/too-long tenant name, unknown field, or missing JSON body. |
+| `422` | Standard validation array for a malformed/too-long tenant name or unknown field. An absent body is valid. |
 | `500` | OAuth-state persistence failure. |
 
 After receiving `authorization_url`, navigate the current page with `window.location.assign(authorization_url)`. Do not open a popup and do not install a `message` listener for this public authentication flow. If navigation cannot happen immediately, render a normal link to the returned Google URL.
@@ -323,7 +326,8 @@ Unknown fields are rejected.
 {"exchange_code":"QF98vS…short-lived-one-time-code…"}
 ```
 
-`200 OK` returns the same session shape as email/password sign-in:
+`200 OK` returns the Follei session plus the safe account/connector/ingestion
+handoff. Provider tokens and Google authorization codes are never returned:
 
 ```json
 {
@@ -337,11 +341,37 @@ Unknown fields are rejected.
     "full_name": "Maya Chen",
     "tenant_id": "62164916-2780-4478-968f-e74c3bd34a58",
     "roles": ["admin"]
+  },
+  "account": {
+    "is_new_user": true,
+    "action": "created"
+  },
+  "google_workspace": {
+    "connection_id": "167f9aed-22b7-4de8-b062-a69687f94c77",
+    "email_address": "maya@northstar.example",
+    "status": "active",
+    "resources": ["gmail", "drive", "calendar", "contacts"]
+  },
+  "gmail_communication": {
+    "connection_id": "32afcc62-9ec7-41a9-8c55-332098a81d5f",
+    "status": "active",
+    "capabilities": ["send", "reply", "read_inbound"]
+  },
+  "ingestion": {
+    "run_id": "80cb66ce-0137-4548-9b8f-45d4a77a50a0",
+    "status": "queued",
+    "state_endpoint": "/api/v1/onboarding/state"
   }
 }
 ```
 
-Every field has the meaning documented in section 2. The exchange atomically marks the code consumed and updates `last_login_at`.
+Session fields have the meaning documented in section 2. `account.action` is
+`created` for a newly provisioned tenant/user and `signed_in` for an existing
+email. The connection objects identify the server-side records; their status
+does not expose credentials. Ingestion is asynchronous: poll the authenticated
+`state_endpoint` with the returned bearer token to receive extracted,
+structured category summaries as each resource finishes. The exchange
+atomically marks the code consumed and updates `last_login_at`.
 
 Errors:
 

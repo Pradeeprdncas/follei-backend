@@ -36,7 +36,8 @@ starts with `sources_connected: 0`.
 
 ### Path B — Google registration or sign-in
 
-Submit `POST /api/v1/auth/google/start` with an optional `tenant_name`. Take the
+Submit an empty `POST /api/v1/auth/google/start` (an optional `tenant_name`
+object is supported for pre-naming a new workspace). Take the
 returned `authorization_url` and assign it to `window.location`; this identity
 flow is a full-page redirect, not a popup.
 
