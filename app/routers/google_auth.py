@@ -7,7 +7,7 @@ from datetime import datetime, timedelta
 from urllib.parse import urlencode
 from uuid import uuid4
 
-from fastapi import APIRouter, Body, Depends, HTTPException, Query, status
+from fastapi import APIRouter, BackgroundTasks, Body, Depends, HTTPException, Query, status
 from fastapi.responses import RedirectResponse
 from loguru import logger
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -139,6 +139,21 @@ def _publish_sync_jobs(connection, run, jobs) -> None:
     producer.flush()
 
 
+def _publish_sync_jobs_safely(connection, run, jobs) -> None:
+    """Dispatch ingestion after the OAuth response without failing login."""
+    try:
+        _publish_sync_jobs(connection, run, jobs)
+    except Exception as exc:
+        # PostgreSQL remains the source of truth: the run/jobs are already
+        # committed as queued and can be dispatched again. Never make a valid
+        # identity login fail merely because the async transport is offline.
+        logger.warning(
+            "Google Workspace sync dispatch deferred: run_id={} error_type={}",
+            getattr(run, "id", "unknown"),
+            type(exc).__name__,
+        )
+
+
 @router.post("/start")
 def google_auth_start(
     payload: GoogleAuthStartRequest | None = Body(default=None),
@@ -172,6 +187,7 @@ def google_auth_start(
 
 @router.get("/callback", response_class=RedirectResponse, status_code=status.HTTP_302_FOUND)
 async def google_auth_callback(
+    background_tasks: BackgroundTasks,
     state: str | None = Query(default=None),
     code: str | None = Query(default=None),
     error: str | None = Query(default=None),
@@ -210,7 +226,7 @@ async def google_auth_callback(
             allow_inbound_lead_creation=True,
             campaign_enabled=True,
         )
-        _publish_sync_jobs(connection, run, jobs)
+        background_tasks.add_task(_publish_sync_jobs_safely, connection, run, jobs)
 
         exchange_code = secrets.token_urlsafe(48)
         db.add(OAuthLoginExchange(

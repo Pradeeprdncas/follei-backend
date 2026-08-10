@@ -212,6 +212,54 @@ def test_public_google_auth_callback_redirects_one_time_exchange_not_jwts(monkey
     client.close()
 
 
+def test_public_google_auth_callback_does_not_fail_when_sync_dispatch_is_offline(monkeypatch):
+    tenant_id, user_id, connection_id, email_connection_id, run_id = (uuid.uuid4() for _ in range(5))
+    db = _DB()
+    api = FastAPI()
+    api.include_router(google_auth.router)
+    api.dependency_overrides[get_db] = lambda: db
+    client = TestClient(api)
+    oauth_state = SimpleNamespace(metadata_={"resources": ["gmail"], "tenant_name": None})
+    identity = {"sub": "google-sub", "email": "maya@example.com", "email_verified": True}
+    user = SimpleNamespace(id=user_id, tenant_id=tenant_id)
+    connection = SimpleNamespace(id=connection_id, tenant_id=tenant_id)
+    email_connection = SimpleNamespace(id=email_connection_id)
+    run = SimpleNamespace(id=run_id, source_id=uuid.uuid4())
+    jobs = [SimpleNamespace(id=uuid.uuid4(), payload={"resource": "gmail"})]
+    monkeypatch.setattr(
+        google_auth.GoogleWorkspaceOAuthService,
+        "complete_identity_authorization",
+        AsyncMock(return_value=(oauth_state, {"access_token": "server-only"}, identity)),
+    )
+    monkeypatch.setattr(
+        google_auth.GoogleWorkspaceOAuthService,
+        "persist_workspace_connection",
+        lambda *_args, **_kwargs: (connection, run, jobs),
+    )
+    monkeypatch.setattr(
+        google_auth.GoogleWorkspaceOAuthService,
+        "persist_gmail_communication_connection",
+        lambda *_args, **_kwargs: email_connection,
+    )
+    monkeypatch.setattr(google_auth, "_account_for_identity", lambda *_args, **_kwargs: (user, True))
+    monkeypatch.setattr(
+        google_auth,
+        "_publish_sync_jobs",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(ConnectionError("broker offline")),
+    )
+
+    response = client.get(
+        "/api/v1/auth/google/callback?state=opaque&code=provider-code",
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 302
+    query = parse_qs(urlparse(response.headers["location"]).query)
+    assert "exchange_code" in query
+    assert "error" not in query
+    client.close()
+
+
 def test_public_google_auth_denial_redirects_with_sanitized_error():
     db = _DB()
     api = FastAPI()
