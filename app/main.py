@@ -25,6 +25,7 @@ from app.services.rag.vectorstore.qdrant import ensure_collection
 from app.config.kafka import ensure_topics
 from loguru import logger
 from app.config.settings import get_settings
+from app.api_surface import classify_mounted_api_surface
 
 
 def create_app() -> FastAPI:
@@ -88,6 +89,10 @@ def create_app() -> FastAPI:
     app.include_router(tools.tools_router, prefix="/api")
     app.include_router(tools.executions_router, prefix="/api")
     app.include_router(tools.logs_router, prefix="/api")
+
+    # Preserve mounted scaffolding for compatibility, but make its support
+    # level explicit in generated OpenAPI/Swagger.
+    classify_mounted_api_surface(app)
 
     @app.on_event("startup")
     async def startup():

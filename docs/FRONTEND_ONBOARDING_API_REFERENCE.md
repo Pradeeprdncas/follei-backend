@@ -13,7 +13,8 @@ Examples assume an API origin of `http://localhost:8000`. Prefix relative paths 
 - JSON requests: `Content-Type: application/json`
 - File uploads: `multipart/form-data`; let the browser set the boundary.
 - Knowledge answers: `text/event-stream`
-- OAuth callback: `text/html`; it is opened in a popup and is not fetched as JSON.
+- Public Google auth callback: `302 Found` redirect to the frontend.
+- Authenticated Workspace OAuth callback: `text/html`; it remains a popup `postMessage` flow.
 
 ### Authentication
 
@@ -266,54 +267,49 @@ Errors:
 | `422` | Standard validation array for a malformed/too-long tenant name, unknown field, or missing JSON body. |
 | `500` | OAuth-state persistence failure. |
 
-Use the same popup-blocking pattern as section 4: synchronously open `about:blank` from the click event, call this endpoint, then assign `popup.location` to `authorization_url`.
+After receiving `authorization_url`, navigate the current page with `window.location.assign(authorization_url)`. Do not open a popup and do not install a `message` listener for this public authentication flow. If navigation cannot happen immediately, render a normal link to the returned Google URL.
 
-### 3.2 Google auth callback and popup message
+### 3.2 Google auth callback and full-page frontend redirect
 
 `GET /api/v1/auth/google/callback` — public provider callback. The frontend does not call it. Register the backend's configured `GOOGLE_AUTH_OAUTH_REDIRECT_URI` exactly in Google Cloud.
 
-Accepted query fields are `state?: string`, `code?: string`, and `error?: string`. All are optional at HTTP validation level so cancellation can still return a safe HTML message. Success requires valid, unexpired, single-use `state` and `code`, and no `error`.
+Accepted query fields are `state?: string`, `code?: string`, and `error?: string`. All are optional at HTTP validation level so cancellation can still redirect safely. Success requires valid, unexpired, single-use `state` and `code`, and no `error`.
 
-The callback returns `200 text/html` and posts one of these messages to the configured exact frontend origin.
+The callback returns `302 Found` with a `Location` under the configured frontend base URL. It never returns a popup script.
 
 Success:
 
-```json
-{
-  "type": "follei:auth-success",
-  "provider": "google",
-  "exchange_code": "QF98vS…short-lived-one-time-code…",
-  "expires_in": 120,
-  "is_new_user": true,
-  "connection_id": "167f9aed-22b7-4de8-b062-a69687f94c77",
-  "run_id": "80cb66ce-0137-4548-9b8f-45d4a77a50a0",
-  "resources": ["gmail", "drive", "calendar", "contacts"]
-}
+```http
+HTTP/1.1 302 Found
+Location: https://app.follei.example/auth/callback?exchange_code=QF98vS…&expires_in=120&is_new_user=true&connection_id=167f9aed-22b7-4de8-b062-a69687f94c77&run_id=80cb66ce-0137-4548-9b8f-45d4a77a50a0&resources=gmail%2Cdrive%2Ccalendar%2Ccontacts
 ```
 
-`exchange_code` is a one-use credential valid for 120 seconds; exchange it immediately and never log/store it. `is_new_user` selects new-user onboarding versus returning-user routing. `connection_id` is the created/reused Workspace connection. `run_id` identifies the ingestion run, which already contains four independently queued jobs. `resources` confirms their resource set.
+Query fields are all strings. `exchange_code` is a one-use credential valid for 120 seconds; exchange it immediately and never log/store it. `expires_in` is `"120"`. `is_new_user` is `"true"` or `"false"`. `connection_id` is the created/reused Workspace connection. `run_id` identifies the ingestion run, which already contains four independently queued jobs. `resources` is one comma-separated value: `gmail,drive,calendar,contacts`.
 
 Failure, including user cancellation:
 
-```json
-{
-  "type": "follei:auth-error",
-  "provider": "google",
-  "message": "Google sign-in could not be completed"
-}
+```http
+HTTP/1.1 302 Found
+Location: https://app.follei.example/auth/callback?error=access_denied
 ```
 
-Failure causes include denial/cancellation, bad/expired/reused state, provider exchange/identity verification failure, inactive Follei user, missing refresh token, account/connector persistence failure, or queue publication failure. The response never contains Google tokens, client secrets, authorization codes, or raw provider errors.
+User cancellation or Google's `access_denied` becomes the fixed safe value `error=access_denied`. Every other failure becomes `error=oauth_failed`, including bad/expired/reused state, provider exchange/identity verification failure, inactive Follei user, missing refresh token, account/connector persistence failure, or queue publication failure. Raw provider error descriptions are discarded. The redirect never contains Google tokens, client secrets, provider authorization codes, or raw provider errors.
 
-Validate `event.origin` against the API origin, `event.source` against the popup, and both `type` and `provider`. Close the popup after accepting a message. Retain popup-close and 10-minute timeout handling for browser/network failures where no message arrives.
+The frontend route `/auth/callback` should read `window.location.search`:
 
-### 3.3 Exchange popup code for Follei session
+1. If `error` exists, show a safe retry/cancelled state and do not call exchange.
+2. If `exchange_code` exists, remove or replace the URL immediately so browser history, screenshots, and analytics do not retain it.
+3. Call `/api/v1/auth/google/exchange` with that code.
+4. Store the returned Follei session, then use `is_new_user` to select onboarding versus the existing workspace.
+5. Retain `connection_id`, `run_id`, and split `resources` on commas if the UI needs sync progress.
+
+### 3.3 Exchange redirect code for Follei session
 
 `POST /api/v1/auth/google/exchange` — public.
 
 | Field | Required | Type/validation | Example |
 |---|---:|---|---|
-| `exchange_code` | yes | string, 20–512 chars | the exact callback message value |
+| `exchange_code` | yes | string, 20–512 chars | the exact `exchange_code` query value from `/auth/callback` |
 
 Unknown fields are rejected.
 
@@ -350,13 +346,15 @@ Errors:
 | `422` | Validation array for a missing, too-short/long, non-string, or extra field. |
 | `500` | Exchange/session persistence failure. |
 
-Sequence: start → popup callback message → exchange immediately → store Follei tokens → call onboarding state. For a new user, continue profile onboarding while the four Google jobs run. For an existing user, restore the normal workspace and poll the returned `run_id` as needed.
+Sequence: start → full-page Google navigation → backend 302 to `/auth/callback` → read/remove query parameters → exchange immediately → store Follei tokens → call onboarding state. For a new user, continue profile onboarding while the four Google jobs run. For an existing user, restore the normal workspace and poll the returned `run_id` as needed.
 
 ---
 
 ## 4. Google Workspace OAuth connection
 
 This connection imports four independently queued resources: `gmail`, `drive`, `calendar`, and `contacts`. It is tenant-scoped and is only available after Follei authentication.
+
+> Unlike public Google registration/sign-in in section 3, this mid-onboarding connection intentionally remains a popup with `window.opener.postMessage`. Do not full-page navigate away from an authenticated onboarding session for this flow.
 
 ### 4.1 Start Workspace OAuth
 
@@ -1135,7 +1133,7 @@ Errors: `401`; `400 {"detail":"No file provided"}`; `400 {"detail":"No data rows
 
 ### 9.2 Upload/create an import job
 
-`POST /api/leads/import/upload` — bearer auth required. `/api/leads/import/async` is an alias with the same contract.
+`POST /api/leads/import/upload` — bearer auth required and is the canonical job-based import path. `/api/leads/import/async` remains a deprecated compatibility alias; new frontend code must not use it.
 
 Request `multipart/form-data`:
 
@@ -1502,7 +1500,7 @@ Use `AbortController` when the user cancels or leaves the page. If a proxy buffe
 
 ## 11. End-to-end frontend call order
 
-1. Register/sign in with email/password, or run the combined Google auth flow and immediately exchange its popup code.
+1. Register/sign in with email/password, or run the combined Google auth full-page redirect flow and immediately exchange its query-string code.
 2. Store session tokens and tenant ID; complete the existing company/workspace profile step.
 3. Connect Google Workspace through the popup and/or add a website source.
 4. Poll `GET /api/v1/onboarding/state` while runs are active.
@@ -1518,8 +1516,9 @@ Use `AbortController` when the user cancels or leaves the page. If a proxy buffe
 
 - **Google auth scope:** Google registration/sign-in deliberately includes Workspace consent and automatically queues all four resource syncs; it is not an identity-only flow.
 - **Popup blocking:** open a blank window synchronously, then navigate after the authenticated start request.
-- **OAuth cancellation:** callback requests without `code` produce a 422 page and no `postMessage`; detect popup closure and timeout.
-- **`postMessage` validation:** verify API origin, popup window source, provider, and message type.
+- **Public Google auth callback:** read and immediately remove its one-time `exchange_code` from `/auth/callback`; it does not use `postMessage`.
+- **Workspace OAuth cancellation:** the separate popup callback can still receive a request without `code`, producing a 422 page and no `postMessage`; detect popup closure and timeout.
+- **Workspace `postMessage` validation:** verify API origin, popup window source, provider, and message type.
 - **Token timing:** both access and current refresh tokens are short-lived; refresh early and serialize refresh attempts.
 - **Tenant isolation:** never take tenant choice from form state. Legacy fields must equal the JWT tenant.
 - **Adaptive summaries:** render the returned `display.mode`; never fetch/render thousands of aggregate items from state.

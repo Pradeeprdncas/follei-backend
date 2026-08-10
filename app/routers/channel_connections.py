@@ -15,7 +15,7 @@ from app.schemas.channel_connection import ChannelComplianceUpdate, ChannelConne
 from app.services.communications.connection_verification import ProviderVerificationError, verify_channel
 from app.services.communications.email_connections import encrypt_secret
 
-router = APIRouter(prefix="/api/channel-connections", tags=["channel-connections"])
+router = APIRouter(prefix="/api/channel-connections", tags=["Onboarding - channel connections"])
 
 
 def _owned(db: Session, tenant_id: str, connection_id: UUID) -> TenantChannelConnection:

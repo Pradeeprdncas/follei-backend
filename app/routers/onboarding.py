@@ -29,7 +29,7 @@ from app.services.knowledge.categories import canonical_taxonomy_key
 from app.services.knowledge.category_summaries import refresh_review_progress
 from app.services.knowledge.memory_store import seed_onboarding_context
 
-router = APIRouter(prefix="/api/v1/onboarding", tags=["onboarding"])
+router = APIRouter(prefix="/api/v1/onboarding", tags=["Onboarding - setup"])
 
 _REQUIRED_FIELDS = ("company_name", "timezone", "industry")
 
@@ -317,7 +317,7 @@ def update_onboarding_user_profile(
     return _user_response(user)
 
 
-@router.get("/status")
+@router.get("/status", deprecated=True, tags=["Legacy / compatibility"])
 def onboarding_status(
     db: Session = Depends(get_db),
     tenant_id: str = Depends(get_authenticated_tenant_id),
@@ -346,7 +346,7 @@ def onboarding_status(
     }
 
 
-@router.get("/extractions")
+@router.get("/extractions", deprecated=True, tags=["Legacy / compatibility"])
 def onboarding_extractions(
     review_status: str = "draft",
     db: Session = Depends(get_db),
@@ -360,7 +360,7 @@ class ExtractionEditRequest(BaseModel):
     payload: dict = Field(..., description="Replacement payload for the draft fact. Edits the draft row; approval still happens via /knowledge/review/facts/{draft_id}/approve.")
 
 
-@router.patch("/extractions/{draft_id}")
+@router.patch("/extractions/{draft_id}", deprecated=True, tags=["Legacy / compatibility"])
 def edit_extraction_draft(
     draft_id: uuid.UUID,
     body: ExtractionEditRequest,

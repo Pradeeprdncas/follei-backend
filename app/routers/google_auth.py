@@ -1,14 +1,14 @@
 """Public Google identity auth that also connects and syncs Workspace data."""
 from __future__ import annotations
 
-import json
 import re
 import secrets
 from datetime import datetime, timedelta
+from urllib.parse import urlencode
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from fastapi.responses import HTMLResponse
+from fastapi.responses import RedirectResponse
 from loguru import logger
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.orm import Session
@@ -147,14 +147,15 @@ def google_auth_start(payload: GoogleAuthStartRequest, db: Session = Depends(get
     })
 
 
-@router.get("/callback", response_class=HTMLResponse)
+@router.get("/callback", response_class=RedirectResponse, status_code=status.HTTP_302_FOUND)
 async def google_auth_callback(
     state: str | None = Query(default=None),
     code: str | None = Query(default=None),
     error: str | None = Query(default=None),
     db: Session = Depends(get_db),
 ):
-    """Provider callback; send a short-lived exchange code to the exact frontend origin."""
+    """Provider callback; redirect a short-lived exchange code to the frontend."""
+    safe_error = "access_denied" if error == "access_denied" else "oauth_failed"
     try:
         if error or not state or not code:
             raise GoogleWorkspaceError("Google authorization was not completed")
@@ -187,31 +188,23 @@ async def google_auth_callback(
             expires_at=datetime.utcnow() + timedelta(seconds=_EXCHANGE_TTL_SECONDS),
         ))
         db.commit()
-        payload = {
-            "type": "follei:auth-success",
-            "provider": "google",
+        query = {
             "exchange_code": exchange_code,
             "expires_in": _EXCHANGE_TTL_SECONDS,
-            "is_new_user": is_new_user,
+            "is_new_user": str(is_new_user).lower(),
             "connection_id": str(connection.id),
             "run_id": str(run.id),
-            "resources": list(oauth_state.metadata_.get("resources") or DEFAULT_RESOURCES),
+            "resources": ",".join(oauth_state.metadata_.get("resources") or DEFAULT_RESOURCES),
         }
     except Exception as exc:
         db.rollback()
         logger.warning("Google identity OAuth callback failed: {}", type(exc).__name__)
-        payload = {
-            "type": "follei:auth-error",
-            "provider": "google",
-            "message": "Google sign-in could not be completed",
-        }
+        query = {"error": safe_error}
 
-    encoded = json.dumps(payload).replace("<", "\\u003c")
-    target_origin = json.dumps(_settings.FRONTEND_BASE_URL.rstrip("/"))
-    return HTMLResponse(
-        "<!doctype html><title>Follei Google sign-in</title>"
-        "<p>You may close this window.</p>"
-        f"<script>const result={encoded};if(window.opener)window.opener.postMessage(result,{target_origin});</script>"
+    callback_url = f"{_settings.FRONTEND_BASE_URL.rstrip('/')}/auth/callback"
+    return RedirectResponse(
+        url=f"{callback_url}?{urlencode(query)}",
+        status_code=status.HTTP_302_FOUND,
     )
 
 

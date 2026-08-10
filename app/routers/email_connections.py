@@ -30,7 +30,7 @@ from app.services.communications.connection_verification import (
 )
 from app.services.communications.gmail_oauth import GmailOAuthError, GmailOAuthService
 
-router = APIRouter(prefix="/api/email-connections", tags=["email-connections"])
+router = APIRouter(prefix="/api/email-connections", tags=["Onboarding - email connections"])
 
 
 def _oauth_result_url(target: str, **params: str) -> str:

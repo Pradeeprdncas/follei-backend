@@ -52,7 +52,7 @@ from app.config.settings import get_settings
 from app.core.security import get_authenticated_tenant_id, require_matching_tenant
 from app.config.ferretdb import get_context_database
 
-router = APIRouter(prefix="/leads/import", tags=["Lead Import"])
+router = APIRouter(prefix="/leads/import", tags=["Onboarding - lead import"])
 _settings = get_settings()
 _URL_PATTERN = re.compile(r"https?://[^\s<>\"']+", re.IGNORECASE)
 MINIMUM_ONBOARDING_LEAD_ROWS = MINIMUM_ACCEPTED_LEADS
@@ -214,7 +214,13 @@ class PreviewResult(BaseModel):
 
 # ── POST /leads/import — sync direct import ──────────────────────
 
-@router.post("", response_model=ImportResult, status_code=201)
+@router.post(
+    "",
+    response_model=ImportResult,
+    status_code=201,
+    deprecated=True,
+    tags=["Legacy / compatibility"],
+)
 async def import_leads(
     tenant_id: str = Form(...),
     file: UploadFile = File(...),
@@ -225,7 +231,8 @@ async def import_leads(
     """Import leads from CSV directly — no job, no LLM.
 
     Uses csv.DictReader to parse, normalises headers, deduplicates by email.
-    Limits: ≤1000 rows. For larger files use POST /leads/import/async.
+    Compatibility endpoint. New clients use the upload -> review -> commit job
+    flow at POST /leads/import/upload.
     """
     if not file.filename:
         raise HTTPException(status_code=400, detail="No file provided")
@@ -269,7 +276,7 @@ async def import_leads(
     if len(rows) > 1000:
         raise HTTPException(
             status_code=413,
-            detail=f"CSV has {len(rows)} rows (max 1000 for sync import). Use POST /leads/import/async for large files."
+            detail=f"CSV has {len(rows)} rows (max 1000 for sync import). Use POST /leads/import/upload."
         )
 
     results: list[dict] = []
@@ -379,14 +386,20 @@ def get_service(db: Session = Depends(get_db)) -> LeadImportService:
     return LeadImportService(repo)
 
 
-@router.post("/async", response_model=LeadImportUploadResponse, status_code=201)
+@router.post(
+    "/async",
+    response_model=LeadImportUploadResponse,
+    status_code=201,
+    deprecated=True,
+    tags=["Legacy / compatibility"],
+)
 async def import_leads_async(
     tenant_id: str = Form(...),
     file: UploadFile = File(...),
     service: LeadImportService = Depends(get_service),
     authenticated_tenant_id: str = Depends(get_authenticated_tenant_id),
 ):
-    """Upload a large CSV for async processing (>1000 rows). Creates a background job."""
+    """Compatibility alias for POST /leads/import/upload."""
     if not file.filename:
         raise HTTPException(status_code=400, detail="No file provided")
 

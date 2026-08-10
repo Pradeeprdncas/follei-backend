@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import uuid
 from types import SimpleNamespace
+from urllib.parse import parse_qs, urlparse
 from unittest.mock import AsyncMock
 
 import pytest
@@ -76,7 +77,7 @@ def test_public_google_auth_start_requests_all_workspace_resources(monkeypatch):
     client.close()
 
 
-def test_public_google_auth_callback_uses_one_time_exchange_not_jwts(monkeypatch):
+def test_public_google_auth_callback_redirects_one_time_exchange_not_jwts(monkeypatch):
     tenant_id, user_id, connection_id, run_id = (uuid.uuid4() for _ in range(4))
     job_ids = [uuid.uuid4() for _ in range(4)]
     db = _DB()
@@ -108,30 +109,69 @@ def test_public_google_auth_callback_uses_one_time_exchange_not_jwts(monkeypatch
     monkeypatch.setattr(google_auth, "_account_for_identity", lambda *_args, **_kwargs: (user, True))
     monkeypatch.setattr(google_auth, "_publish_sync_jobs", lambda *_args, **_kwargs: None)
 
-    response = client.get("/api/v1/auth/google/callback?state=opaque&code=provider-code")
+    response = client.get(
+        "/api/v1/auth/google/callback?state=opaque&code=provider-code",
+        follow_redirects=False,
+    )
 
-    assert response.status_code == 200
-    assert "follei:auth-success" in response.text
-    assert "exchange_code" in response.text
-    assert "access_token" not in response.text.lower()
-    assert "refresh_token" not in response.text.lower()
-    assert "provider-code" not in response.text
+    assert response.status_code == 302
+    location = urlparse(response.headers["location"])
+    query = parse_qs(location.query)
+    assert location.path == "/auth/callback"
+    assert set(query) == {"exchange_code", "expires_in", "is_new_user", "connection_id", "run_id", "resources"}
+    assert query["expires_in"] == ["120"]
+    assert query["is_new_user"] == ["true"]
+    assert query["connection_id"] == [str(connection_id)]
+    assert query["run_id"] == [str(run_id)]
+    assert query["resources"] == ["gmail,drive,calendar,contacts"]
+    assert "access_token" not in response.headers["location"].lower()
+    assert "refresh_token" not in response.headers["location"].lower()
+    assert "provider-code" not in response.headers["location"]
     assert len(db.added) == 1
     client.close()
 
 
-def test_public_google_auth_denial_posts_sanitized_error():
+def test_public_google_auth_denial_redirects_with_sanitized_error():
     db = _DB()
     api = FastAPI()
     api.include_router(google_auth.router)
     api.dependency_overrides[get_db] = lambda: db
     client = TestClient(api)
 
-    response = client.get("/api/v1/auth/google/callback?error=access_denied&state=opaque")
+    response = client.get(
+        "/api/v1/auth/google/callback",
+        params={
+            "error": "access_denied",
+            "state": "opaque",
+            "error_description": "provider-secret-that-must-not-reach-frontend",
+        },
+        follow_redirects=False,
+    )
 
-    assert response.status_code == 200
-    assert "follei:auth-error" in response.text
-    assert "access_denied" not in response.text
+    assert response.status_code == 302
+    location = urlparse(response.headers["location"])
+    assert location.path == "/auth/callback"
+    assert parse_qs(location.query) == {"error": ["access_denied"]}
+    assert "provider-secret" not in response.headers["location"]
+    client.close()
+
+
+def test_public_google_auth_invalid_callback_redirects_generic_safe_error():
+    db = _DB()
+    api = FastAPI()
+    api.include_router(google_auth.router)
+    api.dependency_overrides[get_db] = lambda: db
+    client = TestClient(api)
+
+    response = client.get(
+        "/api/v1/auth/google/callback?state=opaque-without-code",
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 302
+    location = urlparse(response.headers["location"])
+    assert location.path == "/auth/callback"
+    assert parse_qs(location.query) == {"error": ["oauth_failed"]}
     client.close()
 
 

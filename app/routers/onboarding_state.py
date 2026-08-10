@@ -24,7 +24,7 @@ from app.services.knowledge.categories import (
 from app.services.onboarding_state import build_onboarding_state
 
 
-router = APIRouter(prefix="/api/v1/onboarding", tags=["onboarding-state"])
+router = APIRouter(prefix="/api/v1/onboarding", tags=["Onboarding - knowledge review"])
 
 
 class ConfirmationRequest(BaseModel):
