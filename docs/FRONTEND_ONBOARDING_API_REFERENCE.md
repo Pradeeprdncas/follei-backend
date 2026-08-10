@@ -312,8 +312,15 @@ User cancellation or Google's `access_denied` becomes the fixed safe value `erro
 
 Failure redirects also include a safe `step` value so the frontend can show a
 useful retry message and support can locate the server-side log. Its enum is
-`authorization`, `token_exchange`, `account_setup`, `workspace_connection`,
-`gmail_connection`, or `session_exchange`. It never contains provider data.
+`authorization`, `state_validation`, `pkce_validation`, `provider_token`,
+`identity_verification`, `account_setup`, `workspace_connection`,
+`gmail_connection`, or `session_exchange`. A safe `reason` is also returned;
+expected values include `access_denied`, `missing_callback_parameters`,
+`invalid_state`, `invalid_pkce_state`, `invalid_client`, `invalid_grant`,
+`invalid_request`, `redirect_uri_mismatch`, `unauthorized_client`,
+`provider_rejected`, `missing_id_token`, `invalid_id_token`,
+`identity_claim_mismatch`, and `backend_rejected`. It never contains provider
+codes, tokens, descriptions, or other provider data.
 
 The frontend route `/auth/callback` should read `window.location.search`:
 

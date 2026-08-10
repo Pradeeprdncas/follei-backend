@@ -50,7 +50,10 @@ DRIVE_METADATA_ONLY_MIME_TYPES = {
 
 
 class GoogleWorkspaceError(RuntimeError):
-    pass
+    def __init__(self, message: str, *, oauth_step: str | None = None, safe_reason: str | None = None):
+        super().__init__(message)
+        self.oauth_step = oauth_step
+        self.safe_reason = safe_reason
 
 
 class GoogleWorkspaceOAuthService:
@@ -182,12 +185,24 @@ class GoogleWorkspaceOAuthService:
             IntegrationOAuthState.provider == provider,
         ).first()
         if not row or row.consumed_at or row.expires_at < datetime.utcnow():
-            raise GoogleWorkspaceError("OAuth state is invalid, expired, or already used")
+            raise GoogleWorkspaceError(
+                "OAuth state is invalid, expired, or already used",
+                oauth_step="state_validation",
+                safe_reason="invalid_state",
+            )
         row.consumed_at = datetime.utcnow()
         db.commit()
+        try:
+            verifier = decrypt_secret(row.encrypted_code_verifier)
+        except Exception as exc:
+            raise GoogleWorkspaceError(
+                "OAuth PKCE verifier could not be recovered",
+                oauth_step="pkce_validation",
+                safe_reason="invalid_pkce_state",
+            ) from exc
         token_data = await self._token_request({
             "client_id": self.settings.GMAIL_CLIENT_ID, "client_secret": self.settings.GMAIL_CLIENT_SECRET,
-            "code": code, "code_verifier": decrypt_secret(row.encrypted_code_verifier),
+            "code": code, "code_verifier": verifier,
             "grant_type": "authorization_code", "redirect_uri": redirect_uri,
         })
         access_token = str(token_data.get("access_token") or "")
@@ -668,18 +683,48 @@ class GoogleWorkspaceOAuthService:
         async with httpx.AsyncClient(timeout=30) as client:
             response = await client.post(GOOGLE_TOKEN_URL, data=data)
         if response.status_code != 200:
-            raise GoogleWorkspaceError(f"Google token request failed ({response.status_code})")
+            provider_error = "provider_rejected"
+            try:
+                candidate = str(response.json().get("error") or "")
+            except Exception:
+                candidate = ""
+            allowed = {
+                "invalid_client",
+                "invalid_grant",
+                "invalid_request",
+                "redirect_uri_mismatch",
+                "unauthorized_client",
+            }
+            if candidate in allowed:
+                provider_error = candidate
+            raise GoogleWorkspaceError(
+                f"Google token request failed ({response.status_code})",
+                oauth_step="provider_token",
+                safe_reason=provider_error,
+            )
         return response.json()
 
     async def _verify_identity(self, token_data: dict[str, Any], *, expected_nonce: str) -> dict[str, Any]:
         id_token = str(token_data.get("id_token") or "")
         if not id_token:
-            raise GoogleWorkspaceError("Google did not return an OpenID identity token")
+            raise GoogleWorkspaceError(
+                "Google did not return an OpenID identity token",
+                oauth_step="identity_verification",
+                safe_reason="missing_id_token",
+            )
         async with httpx.AsyncClient(timeout=15) as client:
             response = await client.get("https://oauth2.googleapis.com/tokeninfo", params={"id_token": id_token})
         if response.status_code != 200:
-            raise GoogleWorkspaceError("Google identity token validation failed")
+            raise GoogleWorkspaceError(
+                "Google identity token validation failed",
+                oauth_step="identity_verification",
+                safe_reason="invalid_id_token",
+            )
         identity = response.json()
         if identity.get("aud") != self.settings.GMAIL_CLIENT_ID or identity.get("nonce") != expected_nonce:
-            raise GoogleWorkspaceError("Google identity token audience or nonce did not match")
+            raise GoogleWorkspaceError(
+                "Google identity token audience or nonce did not match",
+                oauth_step="identity_verification",
+                safe_reason="identity_claim_mismatch",
+            )
         return identity

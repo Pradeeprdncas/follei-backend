@@ -198,7 +198,11 @@ async def google_auth_callback(
     failure_step = "authorization"
     try:
         if error or not state or not code:
-            raise GoogleWorkspaceError("Google authorization was not completed")
+            raise GoogleWorkspaceError(
+                "Google authorization was not completed",
+                oauth_step="authorization",
+                safe_reason="access_denied" if error == "access_denied" else "missing_callback_parameters",
+            )
         service = GoogleWorkspaceOAuthService()
         failure_step = "token_exchange"
         oauth_state, token_data, identity = await service.complete_identity_authorization(
@@ -262,12 +266,20 @@ async def google_auth_callback(
         }
     except Exception as exc:
         db.rollback()
+        if isinstance(exc, GoogleWorkspaceError) and exc.oauth_step:
+            failure_step = exc.oauth_step
+        safe_reason = (
+            exc.safe_reason
+            if isinstance(exc, GoogleWorkspaceError) and exc.safe_reason
+            else "backend_rejected"
+        )
         logger.warning(
-            "Google identity OAuth callback failed: step={} error_type={}",
+            "Google identity OAuth callback failed: step={} reason={} error_type={}",
             failure_step,
+            safe_reason,
             type(exc).__name__,
         )
-        query = {"error": safe_error, "step": failure_step}
+        query = {"error": safe_error, "step": failure_step, "reason": safe_reason}
 
     callback_url = f"{_settings.FRONTEND_BASE_URL.rstrip('/')}/auth/callback"
     return RedirectResponse(
