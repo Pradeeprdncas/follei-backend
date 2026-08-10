@@ -13,6 +13,7 @@ from fastapi.testclient import TestClient
 from app.config.database import get_db
 from app.core.security import get_authenticated_tenant_id, get_authenticated_user_id
 from app.routers import crm_sync, google_auth, google_workspace
+from app.services.integrations.google_workspace import GoogleWorkspaceError
 
 
 class _Producer:
@@ -38,6 +39,21 @@ class _DB:
 
     def rollback(self):
         return None
+
+
+class _OAuthStateQueryDB(_DB):
+    def __init__(self, row):
+        super().__init__()
+        self.row = row
+
+    def query(self, *_args):
+        return self
+
+    def filter(self, *_args):
+        return self
+
+    def first(self):
+        return self.row
 
 
 @pytest.fixture()
@@ -310,6 +326,41 @@ def test_public_google_auth_invalid_callback_redirects_generic_safe_error():
         "reason": ["missing_callback_parameters"],
     }
     client.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("row", "expected_reason"),
+    [
+        (None, "state_not_found"),
+        (
+            SimpleNamespace(
+                consumed_at=google_auth.datetime.utcnow(),
+                expires_at=google_auth.datetime.utcnow() + google_auth.timedelta(minutes=5),
+            ),
+            "state_already_used",
+        ),
+        (
+            SimpleNamespace(
+                consumed_at=None,
+                expires_at=google_auth.datetime.utcnow() - google_auth.timedelta(seconds=1),
+            ),
+            "state_expired",
+        ),
+    ],
+)
+async def test_public_google_oauth_state_failures_are_distinguishable(row, expected_reason):
+    service = google_auth.GoogleWorkspaceOAuthService()
+
+    with pytest.raises(GoogleWorkspaceError) as caught:
+        await service.complete_identity_authorization(
+            _OAuthStateQueryDB(row),
+            state="opaque-state",
+            code="provider-code",
+        )
+
+    assert caught.value.oauth_step == "state_validation"
+    assert caught.value.safe_reason == expected_reason
 
 
 def test_google_and_hubspot_oauth_start_are_frontend_safe(monkeypatch, oauth_client):

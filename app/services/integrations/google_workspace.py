@@ -184,14 +184,24 @@ class GoogleWorkspaceOAuthService:
             IntegrationOAuthState.state_hash == state_hash(state),
             IntegrationOAuthState.provider == provider,
         ).first()
-        if not row or row.consumed_at or row.expires_at < datetime.utcnow():
+        if not row:
             raise GoogleWorkspaceError(
-                "OAuth state is invalid, expired, or already used",
+                "OAuth state was not created by this backend database",
                 oauth_step="state_validation",
-                safe_reason="invalid_state",
+                safe_reason="state_not_found",
             )
-        row.consumed_at = datetime.utcnow()
-        db.commit()
+        if row.consumed_at:
+            raise GoogleWorkspaceError(
+                "OAuth state was already used",
+                oauth_step="state_validation",
+                safe_reason="state_already_used",
+            )
+        if row.expires_at < datetime.utcnow():
+            raise GoogleWorkspaceError(
+                "OAuth state expired",
+                oauth_step="state_validation",
+                safe_reason="state_expired",
+            )
         try:
             verifier = decrypt_secret(row.encrypted_code_verifier)
         except Exception as exc:
@@ -211,6 +221,11 @@ class GoogleWorkspaceOAuthService:
         email = str(identity.get("email") or "").strip().lower()
         if not access_token or not subject or not email or identity.get("email_verified") not in (True, "true"):
             raise GoogleWorkspaceError("Google did not return a verified Workspace identity")
+        # Consume only after the provider token and identity are verified. A
+        # transient provider/network failure must not make the state appear as
+        # a replay on the next diagnostic attempt.
+        row.consumed_at = datetime.utcnow()
+        db.commit()
         return row, token_data, identity
 
     def persist_workspace_connection(

@@ -316,7 +316,8 @@ useful retry message and support can locate the server-side log. Its enum is
 `identity_verification`, `account_setup`, `workspace_connection`,
 `gmail_connection`, or `session_exchange`. A safe `reason` is also returned;
 expected values include `access_denied`, `missing_callback_parameters`,
-`invalid_state`, `invalid_pkce_state`, `invalid_client`, `invalid_grant`,
+`state_not_found`, `state_already_used`, `state_expired`,
+`invalid_pkce_state`, `invalid_client`, `invalid_grant`,
 `invalid_request`, `redirect_uri_mismatch`, `unauthorized_client`,
 `provider_rejected`, `missing_id_token`, `invalid_id_token`,
 `identity_claim_mismatch`, and `backend_rejected`. It never contains provider
