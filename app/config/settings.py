@@ -101,7 +101,7 @@ class Settings(BaseSettings):
     # -- System 3-6 recovery: revenue intelligence / CRM integrations --
     BANT_MODEL_PATH: str = Field(default="AI_MODELS/bant")
     CRM_ENCRYPTION_KEY: str = Field(default="")
-    FRONTEND_BASE_URL: str = Field(default="http://localhost:3000")
+    FRONTEND_BASE_URL: str = Field(default="http://localhost:5173")
     FRONTEND_CRM_RETURN_PATH: str = Field(default="/settings/integrations/crm")
     SALESFORCE_CLIENT_ID: str = Field(default="")
     SALESFORCE_CLIENT_SECRET: str = Field(default="")
