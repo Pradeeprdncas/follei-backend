@@ -52,6 +52,44 @@ class GoogleWorkspaceOAuthService:
         self.settings = get_settings()
 
     def create_authorization_url(self, db: Session, *, tenant_id: str, user_id: str, resources: list[str]) -> str:
+        return self._create_authorization_url(
+            db,
+            provider="google_workspace",
+            redirect_uri=self.settings.GOOGLE_WORKSPACE_OAUTH_REDIRECT_URI,
+            resources=resources,
+            tenant_id=UUID(tenant_id),
+            user_id=UUID(user_id),
+        )
+
+    def create_identity_authorization_url(
+        self,
+        db: Session,
+        *,
+        resources: list[str],
+        tenant_name: str | None = None,
+    ) -> str:
+        """Start public Google identity auth plus Workspace consent."""
+        return self._create_authorization_url(
+            db,
+            provider="google_identity_workspace",
+            redirect_uri=self.settings.GOOGLE_AUTH_OAUTH_REDIRECT_URI,
+            resources=resources,
+            tenant_id=None,
+            user_id=None,
+            extra_metadata={"tenant_name": tenant_name.strip() if tenant_name else None},
+        )
+
+    def _create_authorization_url(
+        self,
+        db: Session,
+        *,
+        provider: str,
+        redirect_uri: str,
+        resources: list[str],
+        tenant_id: UUID | None,
+        user_id: UUID | None,
+        extra_metadata: dict[str, Any] | None = None,
+    ) -> str:
         selected = list(dict.fromkeys(resources))
         invalid = sorted(set(selected) - set(RESOURCE_SCOPES))
         if invalid or not selected:
@@ -61,16 +99,21 @@ class GoogleWorkspaceOAuthService:
         state, verifier, challenge = new_pkce()
         nonce = secrets.token_urlsafe(24)
         db.add(IntegrationOAuthState(
-            tenant_id=UUID(tenant_id), user_id=UUID(user_id), provider="google_workspace",
+            tenant_id=tenant_id, user_id=user_id, provider=provider,
             state_hash=state_hash(state), encrypted_code_verifier=encrypt_secret(verifier),
-            metadata_={"resources": selected, "nonce": nonce},
+            metadata_={
+                "resources": selected,
+                "nonce": nonce,
+                "redirect_uri": redirect_uri,
+                **(extra_metadata or {}),
+            },
             expires_at=datetime.utcnow() + timedelta(minutes=10),
         ))
         db.commit()
         scopes = ["openid", "email", "profile", *(RESOURCE_SCOPES[item] for item in selected)]
         query = urlencode({
             "client_id": self.settings.GMAIL_CLIENT_ID,
-            "redirect_uri": self.settings.GOOGLE_WORKSPACE_OAUTH_REDIRECT_URI,
+            "redirect_uri": redirect_uri,
             "response_type": "code", "scope": " ".join(scopes), "access_type": "offline",
             "include_granted_scopes": "true", "prompt": "consent", "state": state,
             "nonce": nonce, "code_challenge": challenge, "code_challenge_method": "S256",
@@ -78,9 +121,51 @@ class GoogleWorkspaceOAuthService:
         return f"{GOOGLE_AUTHORIZE_URL}?{query}"
 
     async def complete_authorization(self, db: Session, *, state: str, code: str) -> tuple[GoogleWorkspaceConnection, IngestionRun, list[SourceIngestionJob]]:
+        row, token_data, identity = await self._exchange_authorization(
+            db,
+            state=state,
+            code=code,
+            provider="google_workspace",
+            redirect_uri=self.settings.GOOGLE_WORKSPACE_OAUTH_REDIRECT_URI,
+        )
+        if row.tenant_id is None:
+            raise GoogleWorkspaceError("OAuth state is missing its tenant")
+        return self.persist_workspace_connection(
+            db,
+            tenant_id=row.tenant_id,
+            token_data=token_data,
+            identity=identity,
+            resources=list(row.metadata_.get("resources") or []),
+        )
+
+    async def complete_identity_authorization(
+        self,
+        db: Session,
+        *,
+        state: str,
+        code: str,
+    ) -> tuple[IntegrationOAuthState, dict[str, Any], dict[str, Any]]:
+        """Exchange a public auth code; the router resolves/creates Follei account."""
+        return await self._exchange_authorization(
+            db,
+            state=state,
+            code=code,
+            provider="google_identity_workspace",
+            redirect_uri=self.settings.GOOGLE_AUTH_OAUTH_REDIRECT_URI,
+        )
+
+    async def _exchange_authorization(
+        self,
+        db: Session,
+        *,
+        state: str,
+        code: str,
+        provider: str,
+        redirect_uri: str,
+    ) -> tuple[IntegrationOAuthState, dict[str, Any], dict[str, Any]]:
         row = db.query(IntegrationOAuthState).filter(
             IntegrationOAuthState.state_hash == state_hash(state),
-            IntegrationOAuthState.provider == "google_workspace",
+            IntegrationOAuthState.provider == provider,
         ).first()
         if not row or row.consumed_at or row.expires_at < datetime.utcnow():
             raise GoogleWorkspaceError("OAuth state is invalid, expired, or already used")
@@ -89,7 +174,7 @@ class GoogleWorkspaceOAuthService:
         token_data = await self._token_request({
             "client_id": self.settings.GMAIL_CLIENT_ID, "client_secret": self.settings.GMAIL_CLIENT_SECRET,
             "code": code, "code_verifier": decrypt_secret(row.encrypted_code_verifier),
-            "grant_type": "authorization_code", "redirect_uri": self.settings.GOOGLE_WORKSPACE_OAUTH_REDIRECT_URI,
+            "grant_type": "authorization_code", "redirect_uri": redirect_uri,
         })
         access_token = str(token_data.get("access_token") or "")
         identity = await self._verify_identity(token_data, expected_nonce=str(row.metadata_.get("nonce") or ""))
@@ -97,21 +182,41 @@ class GoogleWorkspaceOAuthService:
         email = str(identity.get("email") or "").strip().lower()
         if not access_token or not subject or not email or identity.get("email_verified") not in (True, "true"):
             raise GoogleWorkspaceError("Google did not return a verified Workspace identity")
+        return row, token_data, identity
 
-        connection = db.query(GoogleWorkspaceConnection).filter_by(tenant_id=row.tenant_id, provider_account_id=subject).first()
-        resources = list(row.metadata_.get("resources") or [])
+    def persist_workspace_connection(
+        self,
+        db: Session,
+        *,
+        tenant_id: UUID,
+        token_data: dict[str, Any],
+        identity: dict[str, Any],
+        resources: list[str],
+    ) -> tuple[GoogleWorkspaceConnection, IngestionRun, list[SourceIngestionJob]]:
+        """Persist server-side provider tokens and queue one job per resource."""
+        access_token = str(token_data.get("access_token") or "")
+        subject = str(identity.get("sub") or "")
+        email = str(identity.get("email") or "").strip().lower()
+        if not access_token or not subject or not email:
+            raise GoogleWorkspaceError("Google Workspace identity is incomplete")
+        selected = list(dict.fromkeys(resources))
+        invalid = sorted(set(selected) - set(RESOURCE_SCOPES))
+        if invalid or not selected:
+            raise GoogleWorkspaceError(f"Invalid Google resources: {invalid or 'none selected'}")
+
+        connection = db.query(GoogleWorkspaceConnection).filter_by(tenant_id=tenant_id, provider_account_id=subject).first()
         source = None
         if connection and connection.source_id:
             source = db.get(KnowledgeSource, connection.source_id)
         if source is None:
             source = KnowledgeSource(
-                id=uuid4(), tenant_id=row.tenant_id, name=f"Google Workspace: {email}",
-                source_type="google_workspace", status="queued", config={"account": email, "resources": resources},
+                id=uuid4(), tenant_id=tenant_id, name=f"Google Workspace: {email}",
+                source_type="google_workspace", status="queued", config={"account": email, "resources": selected},
             )
             db.add(source)
         if connection is None:
             connection = GoogleWorkspaceConnection(
-                tenant_id=row.tenant_id, provider_account_id=subject, email_address=email,
+                tenant_id=tenant_id, provider_account_id=subject, email_address=email,
                 encrypted_access_token=encrypt_secret(access_token), source_id=source.id,
             )
             db.add(connection)
@@ -126,15 +231,15 @@ class GoogleWorkspaceOAuthService:
             raise GoogleWorkspaceError("Google did not return a refresh token; revoke access and reconnect")
         connection.access_token_expires_at = datetime.utcnow() + timedelta(seconds=int(token_data.get("expires_in") or 3600))
         connection.scopes = str(token_data.get("scope") or "").split()
-        connection.enabled_resources = resources
+        connection.enabled_resources = selected
         db.flush()
-        run = IngestionRun(id=uuid4(), tenant_id=row.tenant_id, source_id=source.id, status="queued")
+        run = IngestionRun(id=uuid4(), tenant_id=tenant_id, source_id=source.id, status="queued")
         jobs = [
             SourceIngestionJob(
-                id=uuid4(), tenant_id=row.tenant_id, run_id=run.id, job_type=f"google_{resource}_sync",
+                id=uuid4(), tenant_id=tenant_id, run_id=run.id, job_type=f"google_{resource}_sync",
                 target=email, status="queued", payload={"connection_id": str(connection.id), "resource": resource},
             )
-            for resource in resources
+            for resource in selected
         ]
         db.add_all([run, *jobs])
         db.commit()

@@ -12,9 +12,6 @@ from sqlalchemy.orm import Session
 
 from app.core.security import create_access_token, decode_access_token, hash_password, verify_password
 from app.database.session import get_db
-from app.models.integrations.email_connection import TenantEmailConnection
-from app.schemas.email_connection import EmailConnectionCreate
-from app.services.communications.email_connections import encrypt_secret
 
 
 router = APIRouter(prefix="/api/v1")
@@ -35,18 +32,6 @@ class RegisterRequest(BaseModel):
     password: str = Field(..., min_length=8, max_length=128)
     full_name: str = Field(..., min_length=1, max_length=200)
     tenant_name: str = Field(..., min_length=1, max_length=200)
-    business_email: EmailStr | None = Field(
-        default=None,
-        description="Inbox/sender to connect after registration; may equal the login email.",
-    )
-    connect_gmail: bool = False
-    gmail_auto_reply_enabled: bool = True
-    gmail_campaign_enabled: bool = True
-    email_connections: list[EmailConnectionCreate] = Field(
-        default_factory=list,
-        max_length=2,
-        description="Optional Gmail inbound/reply and Brevo campaign connections.",
-    )
 
     @field_validator("password")
     @classmethod
@@ -395,38 +380,6 @@ def register(payload: RegisterRequest, db: Session = Depends(get_db)) -> Registe
             "now": _now(),
         },
     )
-    for connection in payload.email_connections:
-        db.add(TenantEmailConnection(
-            tenant_id=tenant_id,
-            provider=connection.provider,
-            email_address=str(connection.email_address).strip().lower(),
-            sender_name=connection.sender_name.strip(),
-            encrypted_api_key=encrypt_secret(connection.api_key),
-            encrypted_app_password=encrypt_secret(connection.app_password),
-            imap_host="imap.gmail.com" if connection.provider == "gmail" else None,
-            smtp_host="smtp.gmail.com" if connection.provider == "gmail" else None,
-            smtp_port=465 if connection.provider == "gmail" else None,
-            auto_reply_enabled=connection.auto_reply_enabled if connection.provider == "gmail" else False,
-            allow_inbound_lead_creation=connection.allow_inbound_lead_creation if connection.provider == "gmail" else False,
-            campaign_enabled=connection.campaign_enabled,
-            status="configured",
-        ))
-    requested_business_email = str(payload.business_email or payload.email).strip().lower()
-    has_explicit_gmail = any(item.provider == "gmail" for item in payload.email_connections)
-    if payload.connect_gmail and not has_explicit_gmail:
-        db.add(TenantEmailConnection(
-            tenant_id=tenant_id,
-            provider="gmail",
-            email_address=requested_business_email,
-            sender_name=payload.tenant_name,
-            auth_type="oauth",
-            enabled=False,
-            verified=False,
-            auto_reply_enabled=payload.gmail_auto_reply_enabled,
-            allow_inbound_lead_creation=payload.gmail_auto_reply_enabled,
-            campaign_enabled=payload.gmail_campaign_enabled,
-            status="oauth_required",
-        ))
     # Every tenant starts with an editable, inactive pre-sales template. Leads
     # can be imported immediately, but no communication is sent until the
     # tenant validates and activates this flow.

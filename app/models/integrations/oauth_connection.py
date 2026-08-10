@@ -14,12 +14,29 @@ class IntegrationOAuthState(Base):
     __tablename__ = "integration_oauth_states"
 
     id = Column(Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    tenant_id = Column(Uuid(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False, index=True)
-    user_id = Column(Uuid(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    # Public identity sign-in starts before Follei has a tenant or user. The
+    # authenticated connector flows still populate both fields.
+    tenant_id = Column(Uuid(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=True, index=True)
+    user_id = Column(Uuid(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=True, index=True)
     provider = Column(String(32), nullable=False, index=True)
     state_hash = Column(String(64), nullable=False, unique=True, index=True)
     encrypted_code_verifier = Column(Text, nullable=False)
     metadata_ = Column("metadata", JSONB, nullable=False, default=dict)
+    expires_at = Column(DateTime, nullable=False, index=True)
+    consumed_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+
+
+class OAuthLoginExchange(Base):
+    """Short-lived, one-use bridge from an OAuth popup to Follei JWTs."""
+
+    __tablename__ = "oauth_login_exchanges"
+
+    id = Column(Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id = Column(Uuid(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False, index=True)
+    user_id = Column(Uuid(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    provider = Column(String(32), nullable=False, index=True)
+    code_hash = Column(String(64), nullable=False, unique=True, index=True)
     expires_at = Column(DateTime, nullable=False, index=True)
     consumed_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow)

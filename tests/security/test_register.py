@@ -35,6 +35,7 @@ def test_register_schema_has_no_additional_properties_allowed():
     register_schema = schema["components"]["schemas"]["RegisterRequest"]
     assert register_schema.get("additionalProperties") is not True
     assert set(register_schema["required"]) == {"email", "password", "full_name", "tenant_name"}
+    assert set(register_schema["properties"]) == {"email", "password", "full_name", "tenant_name"}
 
     response_schema = schema["components"]["schemas"]["RegisterResponse"]
     assert set(response_schema["properties"].keys()) == {"user_id", "tenant_id", "access_token", "token_type", "refresh_token", "expires_in"}

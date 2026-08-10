@@ -12,7 +12,7 @@ from app.models.customers.customer import Customer
 from app.models.integrations.integration import IntegrationConnection
 from app.models.integrations.email_connection import EmailOAuthState, TenantEmailConnection
 from app.models.integrations.channel_connection import ChannelComplianceAcknowledgement, TenantChannelConnection
-from app.models.integrations.oauth_connection import IntegrationOAuthState, GoogleWorkspaceConnection
+from app.models.integrations.oauth_connection import IntegrationOAuthState, GoogleWorkspaceConnection, OAuthLoginExchange
 from app.models.leads.lead import Lead
 from app.models.campaigns import Campaign
 from app.models.knowledge.knowledge_base import KnowledgeBase
@@ -34,4 +34,4 @@ from app.models.crm import CRMRecord, CRMSyncRun, TenantCRMConnection
 from app.domains.lead_import.models import LeadImportJob, LeadImportRow
 from app.analysis.models.conversation_analysis import ConversationAnalysis
 
-__all__ = ["Tenant", "User", "Agent", "Conversation", "Message", "ConversationCitation", "Interaction", "Customer", "IntegrationConnection", "EmailOAuthState", "TenantEmailConnection", "IntegrationOAuthState", "GoogleWorkspaceConnection", "TenantChannelConnection", "ChannelComplianceAcknowledgement", "Lead", "Campaign", "KnowledgeBase", "KnowledgeSource", "Document", "Chunk", "BusinessFactDraft", "Entity", "EntityRelation", "KnowledgeSyncEvent", "IndexingJob", "IngestionRun", "SourceIngestionJob", "CategorySummary", "OnboardingConfirmation", "OnboardingProfile", "OnboardingContactChannel", "OnboardingGoal", "BusinessPlan", "CustomerSegment", "SLA", "LearningSignal", "FlowDefinition", "FlowVersion", "FlowEnrollment", "FlowExecutionStep", "CommunicationAsset", "WorkflowTemplate", "TenantWorkflowInstance", "WorkflowApproval", "TenantCRMConnection", "CRMRecord", "CRMSyncRun", "LeadImportJob", "LeadImportRow", "ConversationAnalysis"]
+__all__ = ["Tenant", "User", "Agent", "Conversation", "Message", "ConversationCitation", "Interaction", "Customer", "IntegrationConnection", "EmailOAuthState", "TenantEmailConnection", "IntegrationOAuthState", "GoogleWorkspaceConnection", "OAuthLoginExchange", "TenantChannelConnection", "ChannelComplianceAcknowledgement", "Lead", "Campaign", "KnowledgeBase", "KnowledgeSource", "Document", "Chunk", "BusinessFactDraft", "Entity", "EntityRelation", "KnowledgeSyncEvent", "IndexingJob", "IngestionRun", "SourceIngestionJob", "CategorySummary", "OnboardingConfirmation", "OnboardingProfile", "OnboardingContactChannel", "OnboardingGoal", "BusinessPlan", "CustomerSegment", "SLA", "LearningSignal", "FlowDefinition", "FlowVersion", "FlowEnrollment", "FlowExecutionStep", "CommunicationAsset", "WorkflowTemplate", "TenantWorkflowInstance", "WorkflowApproval", "TenantCRMConnection", "CRMRecord", "CRMSyncRun", "LeadImportJob", "LeadImportRow", "ConversationAnalysis"]
