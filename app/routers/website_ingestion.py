@@ -4,7 +4,7 @@ from __future__ import annotations
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import AliasChoices, BaseModel, Field, HttpUrl
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, HttpUrl
 from sqlalchemy.orm import Session
 
 from app.config.database import get_db
@@ -14,7 +14,6 @@ from app.core.security import get_authenticated_tenant_id
 from app.models.knowledge.document import KnowledgeSource
 from app.models.knowledge.ingestion import IngestionRun, SourceIngestionJob
 from app.schemas.api_envelope import api_envelope
-from app.services.knowledge.categories import normalize_category
 from app.services.knowledge.crawlers import supported_engines
 from app.services.knowledge.website_ingestion import validate_public_url
 
@@ -24,9 +23,9 @@ _settings = get_settings()
 
 
 class WebsiteIngestRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     url: HttpUrl
-    max_pages: int = Field(default=10, ge=1, le=25)
-    category: str | None = None
     engine: str = Field(default="auto", pattern="^(auto|aiohttp|crawl4ai|scrapy)$")
     crawl_consent: bool = Field(
         validation_alias=AliasChoices("crawl_consent", "confirm_authorized"),
@@ -49,7 +48,6 @@ def ingest_website(
         raise HTTPException(status_code=422, detail="Crawl consent must be confirmed")
     try:
         validate_public_url(str(payload.url))
-        category = normalize_category(payload.category) if payload.category else None
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -62,8 +60,10 @@ def ingest_website(
         source_type="website",
         status="queued",
         config={
-            "url": str(payload.url), "max_pages": payload.max_pages,
-            "engine": payload.engine, "category": category,
+            "url": str(payload.url),
+            "engine": payload.engine,
+            "crawl_scope": "same_host_until_exhausted",
+            "classification": "automatic",
             "crawl_consent": True,
             "ownership_verification": "unverified",
         },
@@ -75,14 +75,20 @@ def ingest_website(
         job_type="website_crawl",
         target=str(payload.url),
         status="queued",
-        payload={"engine": payload.engine, "max_pages": payload.max_pages, "category": category},
+        payload={
+            "engine": payload.engine,
+            "stage": "queued",
+            "pages_discovered": 0,
+            "documents_discovered": 0,
+            "items_queued": 0,
+        },
     )
     db.add_all([source, run, job])
     db.commit()
     message = {
         "job_id": str(job.id), "run_id": str(run.id), "source_id": str(source.id),
-        "tenant_id": tenant_id, "url": str(payload.url), "max_pages": payload.max_pages,
-        "engine": payload.engine, "category": category,
+        "tenant_id": tenant_id, "url": str(payload.url),
+        "engine": payload.engine,
     }
     try:
         ensure_topics()
@@ -104,7 +110,9 @@ def ingest_website(
             },
             "run": {"id": str(run.id), "status": run.status},
             "jobs": [{"id": str(job.id), "type": job.job_type, "status": job.status}],
-            "status_url": f"/api/v1/onboarding/state",
+            "status_url": f"/api/v1/onboarding/runs/{run.id}",
+            "events_url": f"/api/v1/onboarding/runs/{run.id}/events",
+            "onboarding_state_url": "/api/v1/onboarding/state",
         },
         accepted=True,
     )

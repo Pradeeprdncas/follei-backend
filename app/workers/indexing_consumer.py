@@ -9,7 +9,6 @@ from kafka.structs import OffsetAndMetadata
 from app.config.kafka import get_consumer, get_producer, ensure_topics
 from app.config.database import SessionLocal
 from app.models.knowledge.indexing_job import IndexingJob
-from app.models.knowledge.document import KnowledgeSource
 from app.models.knowledge.ingestion import IngestionRun
 from app.models.leads.lead import Lead
 from app.config.ferretdb import get_context_database
@@ -17,6 +16,7 @@ from app.config.settings import get_settings
 from app.services.rag.pipelines.indexing import index_document
 from app.services.knowledge.object_storage import materialize_source
 from app.services.knowledge.category_summaries import refresh_category_summaries
+from app.services.knowledge.run_status import reconcile_ingestion_run
 from loguru import logger
 
 _settings = get_settings()
@@ -29,31 +29,12 @@ def sync_ingestion_run_status(db, job: IndexingJob) -> None:
     source_id = metadata.get("knowledge_source_id")
     if not run_id or not source_id:
         return
-    related = [
-        row for row in db.query(IndexingJob).filter(IndexingJob.tenant_id == job.tenant_id).all()
-        if str(((row.payload or {}).get("source_metadata") or {}).get("ingestion_run_id") or "") == str(run_id)
-    ]
-    if not related:
-        return
-    statuses = {str(row.status or "").lower() for row in related}
-    terminal_success = {"indexed", "completed", "ready"}
-    terminal_failure = {"failed", "dead_lettered", "dead_letter", "error"}
-    if any(value not in terminal_success | terminal_failure for value in statuses):
-        return
     run = db.query(IngestionRun).filter(
         IngestionRun.id == UUID(str(run_id)), IngestionRun.tenant_id == job.tenant_id,
     ).first()
-    source = db.query(KnowledgeSource).filter(
-        KnowledgeSource.id == UUID(str(source_id)), KnowledgeSource.tenant_id == job.tenant_id,
-    ).first()
-    if not run or not source:
+    if not run:
         return
-    failed = any(value in terminal_failure for value in statuses)
-    run.status = "partial" if failed and any(value in terminal_success for value in statuses) else "failed" if failed else "completed"
-    source.status = "needs_attention" if failed else "active"
-    run.completed_at = datetime.utcnow()
-    run.error = "One or more indexing jobs failed" if failed else None
-    db.commit()
+    reconcile_ingestion_run(db, run)
 
 
 def sync_lead_pre_nurturing_status(db, job: IndexingJob) -> None:

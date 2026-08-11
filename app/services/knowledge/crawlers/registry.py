@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-from app.services.knowledge.website_ingestion import crawl_website
+from app.services.knowledge.website_ingestion import ProgressCallback, crawl_website
 
 CrawlerEngine = Literal["auto", "aiohttp", "crawl4ai", "scrapy"]
 
@@ -30,12 +30,18 @@ async def crawl_with_adapter(
     url: str,
     *,
     engine: CrawlerEngine = "auto",
-    max_pages: int = 25,
+    max_pages: int | None = None,
     include_assets: bool = True,
+    progress_callback: ProgressCallback | None = None,
 ) -> tuple[list[dict], str]:
     # All engines share the hardened transport. This prevents an optional
     # browser/spider dependency from creating a second, weaker network path.
-    records = await crawl_website(url, max_pages=max_pages, include_assets=include_assets)
+    records = await crawl_website(
+        url,
+        max_pages=max_pages,
+        include_assets=include_assets,
+        progress_callback=progress_callback,
+    )
     selected = engine
     if engine == "auto":
         selected = "aiohttp"

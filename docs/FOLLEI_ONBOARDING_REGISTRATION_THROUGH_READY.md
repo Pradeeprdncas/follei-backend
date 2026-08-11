@@ -163,11 +163,12 @@ can be resynced later with
 
 ### Website knowledge connection — direct call
 
-Submit `POST /api/v1/knowledge/websites/ingest` with the public URL, page limit,
-optional category/engine, and `crawl_consent: true`. Ownership verification is
+Submit `POST /api/v1/knowledge/websites/ingest` with the public URL, optional
+engine, and `crawl_consent: true`. Do not send `max_pages` or `category`: crawl
+scope is controlled by the backend and classification is automatic. Ownership verification is
 not required to begin crawling; consent only authorizes crawling public pages.
-The response provides `source.id`, `run.id`, queued job information, and points
-back to `/api/v1/onboarding/state` for status.
+The response provides `source.id`, `run.id`, queued job information,
+`status_url`, `events_url`, and the tenant-wide `onboarding_state_url`.
 
 A `400` indicates an invalid or unsafe URL/category. A `422` means crawl consent
 was absent. A `503` means the queue could not accept the job; keep the user on
@@ -177,11 +178,18 @@ the source screen and allow resubmission. Do not describe a queued source as
 Advance to ingestion progress after at least one connection/ingest call has
 created a run. Tenants may connect both source types before advancing.
 
-## 5. Poll ingestion through the onboarding state
+## 5. Stream each run, then refresh onboarding state
 
-Poll `GET /api/v1/onboarding/state`; there is no separate canonical website
-status endpoint. Use a modest backoff and ensure only one component owns the
-polling timer.
+For every Google or website `run_id`, prefer authenticated
+`GET /api/v1/onboarding/runs/{run_id}/events` and read the SSE body through
+`fetch()` (native `EventSource` cannot send the Bearer token). The first event
+is a full snapshot; subsequent `progress` events contain current stage, safe
+per-resource/page counters, indexed documents, and source-specific categorized
+results. Stop on the terminal `complete` event. If streaming is unavailable,
+poll `GET /api/v1/onboarding/runs/{run_id}` with modest backoff.
+
+After a run becomes terminal, refresh `GET /api/v1/onboarding/state` for the
+tenant-wide 25-category readiness view.
 
 Render progress from:
 
@@ -191,7 +199,7 @@ Render progress from:
 - `progress.categories_found` and `category_summaries[]`: usable knowledge
   appearing as ingestion completes.
 
-Stop automatic polling when `progress.runs_active === 0`. Then route to review
+If using tenant-wide fallback polling, stop when `progress.runs_active === 0`. Then route to review
 even if optional categories are missing. A run with `failed` status and an
 `error` is terminal for that run: show it alongside successful sources. These
 are deliberately generic client messages (`Google Workspace sync failed`,

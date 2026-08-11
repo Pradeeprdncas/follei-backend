@@ -25,6 +25,7 @@ from app.models.tenancy import Tenant
 from app.routers.onboarding_state import router
 from app.services.knowledge.categories import CATEGORY_DEFINITIONS
 from app.services.knowledge.category_summaries import refresh_category_summaries
+from app.services.knowledge.run_status import reconcile_ingestion_run
 
 
 @pytest.fixture()
@@ -141,7 +142,7 @@ def test_onboarding_state_surfaces_downstream_ingestion_job_failures(onboarding_
     assert row["jobs"] == [
         {
             "id": crawl_id, "type": "website_crawl", "status": "completed",
-            "attempt": 1, "error": None,
+            "attempt": 1, "error": None, "progress": {},
         },
         {
             "id": indexing_id, "type": "document_indexing", "status": "dead_lettered",
@@ -149,6 +150,126 @@ def test_onboarding_state_surfaces_downstream_ingestion_job_failures(onboarding_
         },
     ]
     assert "Vector dimension mismatch" not in str(row)
+
+
+def test_run_snapshot_and_stream_return_source_specific_results(onboarding_client):
+    client, tenant_a, tenant_b, source_a, source_b = onboarding_client
+    database_url = os.environ["TEST_DATABASE_URL"]
+    engine = create_engine(database_url)
+    Session = sessionmaker(bind=engine)
+    with Session() as db:
+        run_a = IngestionRun(
+            id=uuid.uuid4(), tenant_id=tenant_a.id, source_id=source_a.id,
+            status="completed", page_count=2, document_count=1,
+            started_at=datetime.utcnow(), completed_at=datetime.utcnow(),
+        )
+        crawl_a = SourceIngestionJob(
+            id=uuid.uuid4(), tenant_id=tenant_a.id, run_id=run_a.id,
+            job_type="website_crawl", status="completed", attempt=1,
+            payload={
+                "stage": "indexing", "pages_discovered": 2,
+                "documents_discovered": 1, "items_queued": 1,
+                "internal_secret": "must-not-leak",
+            },
+        )
+        document_a = Document(
+            id=uuid.uuid4(), tenant_id=tenant_a.id, source_id=source_a.id,
+            title="Pricing", source_type="txt", source_uri="https://a.example/pricing",
+            status="ready", category="pricing", primary_category="pricing",
+            summary="Tenant A plans", metadata_={"total_chunks": 3},
+        )
+        index_a = IndexingJob(
+            id=uuid.uuid4(), tenant_id=tenant_a.id, document_id=document_a.id,
+            status="indexed", attempt_count=1,
+            payload={"source_metadata": {"ingestion_run_id": str(run_a.id)}},
+        )
+        fact_a = BusinessFactDraft(
+            tenant_id=tenant_a.id, document_id=document_a.id, fact_type="pricing",
+            payload={"name": "Growth plan"}, citation={}, approval_status="draft",
+        )
+        run_b = IngestionRun(
+            id=uuid.uuid4(), tenant_id=tenant_b.id, source_id=source_b.id,
+            status="completed",
+        )
+        db.add_all([run_a, crawl_a, document_a, index_a, fact_a, run_b])
+        db.commit()
+        run_a_id, run_b_id = str(run_a.id), str(run_b.id)
+
+    response = client.get(f"/api/v1/onboarding/runs/{run_a_id}")
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["terminal"] is True
+    assert data["progress_percent"] == 100
+    assert data["counts"] == {
+        "pages_discovered": 2,
+        "documents_discovered": 1,
+        "records_discovered": 0,
+        "items_queued": 1,
+        "documents_indexed": 1,
+        "categories_found": 1,
+        "items_extracted": 1,
+    }
+    assert data["jobs"][0]["progress"] == {
+        "stage": "indexing", "pages_discovered": 2,
+        "documents_discovered": 1, "items_queued": 1,
+    }
+    assert "internal_secret" not in str(data)
+    assert data["results"]["documents"][0]["title"] == "Pricing"
+    assert data["results"]["categories"][0]["sample_items"] == ["Growth plan"]
+    assert str(tenant_b.id) not in str(data)
+
+    with client.stream("GET", f"/api/v1/onboarding/runs/{run_a_id}/events") as streamed:
+        body = "".join(streamed.iter_text())
+    assert streamed.status_code == 200
+    assert streamed.headers["content-type"].startswith("text/event-stream")
+    assert "event: complete" in body
+    assert '"terminal":true' in body
+
+    assert client.get(f"/api/v1/onboarding/runs/{run_b_id}").status_code == 404
+    assert client.get(f"/api/v1/onboarding/runs/{run_b_id}/events").status_code == 404
+    engine.dispose()
+
+
+def test_google_run_cannot_finish_while_a_resource_job_is_still_active(onboarding_client):
+    _client, tenant_a, _tenant_b, source_a, _source_b = onboarding_client
+    database_url = os.environ["TEST_DATABASE_URL"]
+    engine = create_engine(database_url)
+    Session = sessionmaker(bind=engine)
+    with Session() as db:
+        run = IngestionRun(
+            id=uuid.uuid4(), tenant_id=tenant_a.id, source_id=source_a.id,
+            status="running",
+        )
+        gmail = SourceIngestionJob(
+            id=uuid.uuid4(), tenant_id=tenant_a.id, run_id=run.id,
+            job_type="google_gmail_sync", status="completed", payload={"items_queued": 1},
+        )
+        drive = SourceIngestionJob(
+            id=uuid.uuid4(), tenant_id=tenant_a.id, run_id=run.id,
+            job_type="google_drive_sync", status="running", payload={"items_queued": 1},
+        )
+        gmail_index = IndexingJob(
+            id=uuid.uuid4(), tenant_id=tenant_a.id, status="indexed",
+            payload={"source_metadata": {"ingestion_run_id": str(run.id)}},
+        )
+        db.add_all([run, gmail, drive, gmail_index])
+        db.commit()
+
+        reconcile_ingestion_run(db, run)
+        assert run.status == "running"
+        assert run.completed_at is None
+
+        drive.status = "completed"
+        drive_index = IndexingJob(
+            id=uuid.uuid4(), tenant_id=tenant_a.id, status="indexed",
+            payload={"source_metadata": {"ingestion_run_id": str(run.id)}},
+        )
+        db.add(drive_index)
+        db.commit()
+        reconcile_ingestion_run(db, run)
+        assert run.status == "completed"
+        assert run.completed_at is not None
+    engine.dispose()
 
 
 def test_category_items_are_paginated_and_tenant_isolated(onboarding_client):

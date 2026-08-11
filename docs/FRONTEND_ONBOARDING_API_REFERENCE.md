@@ -422,6 +422,8 @@ handoff. Provider tokens and Google authorization codes are never returned:
   "ingestion": {
     "run_id": "80cb66ce-0137-4548-9b8f-45d4a77a50a0",
     "status": "queued",
+    "status_endpoint": "/api/v1/onboarding/runs/80cb66ce-0137-4548-9b8f-45d4a77a50a0",
+    "events_endpoint": "/api/v1/onboarding/runs/80cb66ce-0137-4548-9b8f-45d4a77a50a0/events",
     "state_endpoint": "/api/v1/onboarding/state"
   }
 }
@@ -430,9 +432,9 @@ handoff. Provider tokens and Google authorization codes are never returned:
 Session fields have the meaning documented in section 2. `account.action` is
 `created` for a newly provisioned tenant/user and `signed_in` for an existing
 email. The connection objects identify the server-side records; their status
-does not expose credentials. Ingestion is asynchronous: poll the authenticated
-`state_endpoint` with the returned bearer token to receive extracted,
-structured category summaries as each resource finishes. The exchange
+does not expose credentials. Ingestion is asynchronous: stream the
+authenticated `events_endpoint` (or poll `status_endpoint`) for this run, then
+refresh the tenant-wide `state_endpoint` after terminal completion. The exchange
 atomically marks the code consumed and updates `last_login_at`.
 
 Errors:
@@ -533,7 +535,9 @@ The callback returns `200 text/html`, not JSON. Its script posts to `window.open
   "type": "follei:integration-connected",
   "provider": "google_workspace",
   "connection_id": "167f9aed-22b7-4de8-b062-a69687f94c77",
-  "run_id": "80cb66ce-0137-4548-9b8f-45d4a77a50a0"
+  "run_id": "80cb66ce-0137-4548-9b8f-45d4a77a50a0",
+  "status_url": "/api/v1/onboarding/runs/80cb66ce-0137-4548-9b8f-45d4a77a50a0",
+  "events_url": "/api/v1/onboarding/runs/80cb66ce-0137-4548-9b8f-45d4a77a50a0/events"
 }
 ```
 
@@ -661,14 +665,17 @@ Call after callback success and whenever rendering integration settings. After i
     "jobs": [
       {"id":"d7603cef-3376-492f-8b8e-c05e20642bca","type":"google_gmail_sync","status":"queued"},
       {"id":"7ba76a08-917d-4a85-a34b-3cc5e5429ba6","type":"google_drive_sync","status":"queued"}
-    ]
+    ],
+    "status_url": "/api/v1/onboarding/runs/80cb66ce-0137-4548-9b8f-45d4a77a50a0",
+    "events_url": "/api/v1/onboarding/runs/80cb66ce-0137-4548-9b8f-45d4a77a50a0/events",
+    "onboarding_state_url": "/api/v1/onboarding/state"
   },
   "meta": {"request_id":"<uuid>","generated_at":"<ISO-8601>","accepted":true},
   "errors": []
 }
 ```
 
-Each `jobs[]` item is independently retryable server-side. `type` is exactly `google_gmail_sync`, `google_drive_sync`, `google_calendar_sync`, or `google_contacts_sync`. Poll onboarding state and match `runs[].id` to `run_id`; refresh connections to obtain last sync/error summary.
+Each `jobs[]` item is independently retryable server-side. `type` is exactly `google_gmail_sync`, `google_drive_sync`, `google_calendar_sync`, or `google_contacts_sync`. Stream `events_url` or poll `status_url`; refresh connections to obtain last sync/error summary.
 
 #### Errors
 
@@ -716,8 +723,6 @@ Call before showing engine choices. A normal UI should choose `auto` and need no
 | Field | Required | Type and validation | Example | Meaning |
 |---|---:|---|---|---|
 | `url` | yes | valid HTTP/HTTPS URL; no embedded credentials; host must resolve only to public IPs | `https://northstar.example/` | Crawl root. |
-| `max_pages` | no | integer 1–25, default `10` | `10` | Maximum pages queued for this source. |
-| `category` | no | string or `null`; must normalize to a supported taxonomy key/alias | `products` | Optional category hint. |
 | `engine` | no | enum `auto`, `aiohttp`, `crawl4ai`, `scrapy`; default `auto` | `auto` | Crawl adapter preference. |
 | `crawl_consent` | yes | boolean; must be `true` | `true` | Consent to crawl public pages. It is **not** proof of website ownership. |
 
@@ -726,12 +731,16 @@ The backward-compatible request alias `confirm_authorized` is also accepted in p
 ```json
 {
   "url": "https://northstar.example/",
-  "max_pages": 10,
-  "category": "products",
   "engine": "auto",
   "crawl_consent": true
 }
 ```
+
+`max_pages` and `category` are intentionally not accepted. Follei follows the
+same-host site until its link queue is exhausted, downloads supported linked
+documents, and classifies every page/document automatically. Page/byte safety
+ceilings are deployment settings, not frontend controls. Unknown fields return
+`422` because this request uses `extra="forbid"`.
 
 #### Success response
 
@@ -751,14 +760,21 @@ The backward-compatible request alias `confirm_authorized` is also accepted in p
     "jobs": [
       {"id":"5e599e16-7b64-47a4-badc-cac28ab020b4","type":"website_crawl","status":"queued"}
     ],
-    "status_url": "/api/v1/onboarding/state"
+    "status_url": "/api/v1/onboarding/runs/08fa6706-e3a7-488f-a438-fce11cb207a8",
+    "events_url": "/api/v1/onboarding/runs/08fa6706-e3a7-488f-a438-fce11cb207a8/events",
+    "onboarding_state_url": "/api/v1/onboarding/state"
   },
   "meta": {"request_id":"<uuid>","generated_at":"<ISO-8601>","accepted":true},
   "errors": []
 }
 ```
 
-`source.id` identifies the tenant knowledge source. `run.id` is the polling correlation ID. `jobs` is the queued worker work. `ownership_verification` remains `unverified`; ownership verification is intentionally separate and is not required to crawl public content. `status_url` is relative to the API origin.
+`source.id` identifies the tenant knowledge source. `run.id` is the correlation
+ID shared by Google and website ingestion. `status_url` returns the current
+source-specific snapshot, `events_url` streams changes, and
+`onboarding_state_url` remains the tenant-wide readiness view. All paths are
+relative to the API origin. `ownership_verification` remains `unverified`;
+ownership verification is separate and is not required to crawl public content.
 
 #### Errors
 
@@ -766,20 +782,41 @@ The backward-compatible request alias `confirm_authorized` is also accepted in p
 |---|---|
 | `400` | `{"detail":"Only public HTTP(S) URLs without embedded credentials are allowed"}` for unsafe scheme/credentials. |
 | `400` | `{"detail":"Website host did not resolve"}` or `{"detail":"Website host resolves to a private or non-public address"}` for SSRF checks. |
-| `400` | `{"detail":"Unsupported knowledge category: <value>"}` for a bad category. |
 | `401` | Shared auth error. |
 | `422` | `{"detail":"Crawl consent must be confirmed"}` when false. |
-| `422` | Validation array for missing/invalid URL, consent, page range, or engine enum. |
+| `422` | Validation array for missing/invalid URL or consent, invalid engine, or legacy/unknown fields such as `max_pages` and `category`. |
 | `503` | `{"detail":"Website ingestion could not be queued"}`; the created source/run/job are marked failed. |
 | `500` | Unexpected DNS resolver, database, or infrastructure failure. |
 
 Explicitly selecting an engine that is not installed may be accepted by this endpoint and fail later in the worker. Check `/engines` first or use `auto`.
 
-### 5.3 Check website ingestion status
+### 5.3 Read one ingestion run (Google or website)
 
-There is no dedicated `GET /websites/{source_id}` route. Poll `GET /api/v1/onboarding/state`, find `sources[].id === source.id`, and find `runs[].id === run.id`.
+`GET /api/v1/onboarding/runs/{run_id}` — bearer auth required; no body.
+Cross-tenant/unknown IDs both return `404 {"detail":"Ingestion run not found"}`.
 
-Poll every 1–2 seconds initially, back off to 5–10 seconds, pause when the tab is hidden, and stop when the matching run leaves `queued`, `running`, or `retrying`. A failed run exposes `runs[].error`. The state returns only the 20 newest runs, so retain the returned IDs and do not poll indefinitely.
+The `data` object contains: `run_id`; `source` (`id`, `name`, `type`, `status`);
+`status`; `stage`; `terminal`; `progress_percent`; `counts`
+(`pages_discovered`, `documents_discovered`, `records_discovered`,
+`items_queued`, `documents_indexed`,
+`categories_found`, `items_extracted`); `jobs`; `results.documents`;
+`results.categories`; safe `error`; and lifecycle timestamps. Job `progress`
+contains only safe counters/stages—never OAuth tokens or internal exceptions.
+Each reviewable result category includes a source-filtered `items_endpoint`;
+it is `null` for `general`/unclassified evidence outside the 25-key taxonomy.
+
+### 5.4 Stream one ingestion run (recommended)
+
+`GET /api/v1/onboarding/runs/{run_id}/events` — bearer auth required. Optional
+`interval_ms` is integer `250..5000`, default `1000`. Response type is
+`text/event-stream`; it sends `progress` when the PostgreSQL snapshot changes,
+comments as keep-alives, one terminal `complete`, or `timeout` after 30 minutes.
+
+Do **not** use native `EventSource`: it cannot attach the Bearer header. Use
+`fetch()` and read `response.body`. Reconnect by fetching the same URL; the
+first event is always a full current snapshot, so no event ID replay is needed.
+The stream does not make ingestion synchronous and does not need to be open for
+workers to continue.
 
 ---
 
@@ -812,7 +849,7 @@ Call after login, after creating/connecting any source, while polling ingestion,
         "name": "Website: northstar.example",
         "type": "website",
         "status": "processing",
-        "config": {"url":"https://northstar.example/","engine":"auto","max_pages":10,"category":"products","crawl_consent":true,"ownership_verification":"unverified"}
+        "config": {"url":"https://northstar.example/","engine":"auto","crawl_scope":"same_host_until_exhausted","classification":"automatic","crawl_consent":true,"ownership_verification":"unverified"}
       }
     ],
     "runs": [
@@ -820,11 +857,16 @@ Call after login, after creating/connecting any source, while polling ingestion,
         "id": "08fa6706-e3a7-488f-a438-fce11cb207a8",
         "source_id": "862637ad-b0fc-49ab-b0cf-c66eaf93a33e",
         "status": "running",
+        "stage": "indexing",
+        "terminal": false,
+        "progress_percent": 70,
         "page_count": 4,
         "document_count": 1,
         "error": null,
+        "status_url": "/api/v1/onboarding/runs/08fa6706-e3a7-488f-a438-fce11cb207a8",
+        "events_url": "/api/v1/onboarding/runs/08fa6706-e3a7-488f-a438-fce11cb207a8/events",
         "jobs": [
-          {"id":"<uuid>","type":"website_crawl","status":"completed","attempt":1,"error":null},
+          {"id":"<uuid>","type":"website_crawl","status":"completed","attempt":1,"error":null,"progress":{"stage":"indexing","pages_discovered":4,"documents_discovered":1,"items_queued":5}},
           {"id":"<uuid>","type":"document_indexing","status":"processing","attempt":1,"error":null}
         ]
       }
@@ -889,7 +931,7 @@ The actual response always contains **all 25** category summary objects; the exa
 | `step` | string, currently `knowledge_review` | Current aggregate onboarding stage. |
 | `progress.profile_complete` | boolean | All of `company_name`, `timezone`, and `industry` exist. |
 | `progress.sources_connected` | integer | Number of tenant knowledge-source records, regardless of terminal status. |
-| `progress.runs_active` | integer | Runs whose status is `queued`, `running`, or `retrying`. |
+| `progress.runs_active` | integer | Runs whose status is `queued`, `running`, `retrying`, or `processing`. |
 | `progress.categories_found` | integer | Categories with status exactly `found`; `partial` is not counted here. |
 | `progress.categories_total` | integer, currently `25` | Canonical base taxonomy size. |
 | `sources[]` | array | Tenant sources ordered oldest first. |
@@ -902,15 +944,20 @@ The actual response always contains **all 25** category summary objects; the exa
 | `runs[].id` | UUID string | Run correlation ID. |
 | `runs[].source_id` | UUID string | Parent source ID. |
 | `runs[].status` | string | Persisted run state. Polling-active values are `queued`, `running`, `retrying`; also handle `processing`, `partial`, `completed`, and `failed`. |
+| `runs[].stage` | string | Frontend stage: `queued`, `crawling_website`, `syncing_google_workspace`, `indexing`, or a terminal status. |
+| `runs[].terminal` | boolean | Stop watching this run when true. |
+| `runs[].progress_percent` | integer 0–100 | Coarse phase progress. Website discovery is indeterminate while its total URL count is unknown; show counters alongside this value. |
 | `runs[].page_count` | integer | Pages processed so far/finally. |
 | `runs[].document_count` | integer | Documents processed so far/finally. |
 | `runs[].error` | string or `null` | Safe run failure summary. |
+| `runs[].status_url` / `events_url` | string | Source-specific snapshot/live stream links. |
 | `runs[].jobs` | array | Crawl/provider and downstream document-indexing jobs belonging to this run. |
 | `runs[].jobs[].id` | UUID string | Worker-job correlation ID. |
 | `runs[].jobs[].type` | string | Resource/crawl job type or `document_indexing`. |
 | `runs[].jobs[].status` | string | Worker status, including `queued`, `running`/`processing`, `retrying`, `completed`/`indexed`, `failed`, or `dead_lettered`. |
 | `runs[].jobs[].attempt` | integer | Number of execution attempts. |
 | `runs[].jobs[].error` | string or `null` | Safe actionable downstream error. Show this when a run fails; it is more specific than `runs[].error`. |
+| `runs[].jobs[].progress` | object | Safe provider/crawler counters such as resource, stage, record/page/document counts and current public URL. Arbitrary job payload fields are never exposed. |
 | `category_summaries[]` | array of 25 | One summary per canonical category. |
 | `category_summaries[].key` | category enum below | Stable API key. |
 | `.label` | string | Frontend-ready English label. |
@@ -981,7 +1028,7 @@ Poll only while `progress.runs_active > 0`. Use backoff and avoid simultaneous p
 
 ### 7.1 List category items
 
-`GET /api/v1/onboarding/categories/{key}/items?page=1&page_size=25` — bearer auth required.
+`GET /api/v1/onboarding/categories/{key}/items?page=1&page_size=25&source_id=<uuid>` — bearer auth required.
 
 Call only when the state entry says `display.mode === "enumerable"`; use its `items_endpoint`. Refetch after an item update or optimistically update the row and progress.
 
@@ -992,6 +1039,7 @@ Call only when the state entry says `display.mode === "enumerable"`; use its `it
 | `key` path | yes | canonical category key or supported legacy alias | `pricing_packages` |
 | `page` query | no | integer ≥ 1, default 1 | `1` |
 | `page_size` query | no | integer 1–100, default 25 | `25` |
+| `source_id` query | no | UUID; must be a source owned by this tenant | `<uuid>` |
 
 No body.
 
@@ -1001,6 +1049,7 @@ No body.
 {
   "data": {
     "category": "pricing_packages",
+    "source_id": null,
     "items": [
       {
         "id": "b50c5cb7-31de-46b4-a3c6-1fe9c1130dfb",

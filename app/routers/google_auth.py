@@ -353,6 +353,8 @@ def exchange_google_login(payload: GoogleAuthExchangeRequest, db: Session = Depe
         "ingestion": {
             "run_id": str(ingestion_run.id) if ingestion_run else context.get("run_id"),
             "status": ingestion_run.status if ingestion_run else "queued",
+            "status_endpoint": f"/api/v1/onboarding/runs/{ingestion_run.id if ingestion_run else context.get('run_id')}",
+            "events_endpoint": f"/api/v1/onboarding/runs/{ingestion_run.id if ingestion_run else context.get('run_id')}/events",
             "state_endpoint": "/api/v1/onboarding/state",
         },
     }

@@ -76,6 +76,9 @@ def _ensure_knowledge_source(db: Session, doc) -> KnowledgeSource:
         doc.metadata_ = {**(doc.metadata_ or {}), "knowledge_source_id": str(source.id)}
     else:
         source.status = "processing"
+    # Keep the relational source link authoritative for source-specific review
+    # while preserving metadata for FerretDB/Qdrant projection compatibility.
+    doc.source_id = source.id
     db.commit()
     return source
 

@@ -61,25 +61,52 @@ def process_website_job(data: dict) -> None:
     try:
         job.status = run.status = source.status = "running"
         job.attempt += 1
+        job.payload = {**(job.payload or {}), "stage": "starting_crawl"}
         run.started_at = datetime.utcnow()
         db.commit()
+
+        def persist_progress(progress: dict[str, object]) -> None:
+            job.payload = {**(job.payload or {}), **progress}
+            run.page_count = int(progress.get("pages_discovered") or run.page_count or 0)
+            # During crawling this counts discovered downloadable documents;
+            # after fan-out it becomes the total page+document indexing count.
+            run.document_count = int(progress.get("documents_discovered") or 0)
+            db.commit()
+
         records, selected_engine = asyncio.run(crawl_with_adapter(
             data["url"], engine=data.get("engine", "auto"),
-            max_pages=int(data.get("max_pages", 10)), include_assets=True,
+            max_pages=_settings.WEBSITE_CRAWL_PAGE_LIMIT,
+            include_assets=True,
+            progress_callback=persist_progress,
         ))
         pages = [record for record in records if "content" not in record and record.get("text")]
         assets = [record for record in records if "content" in record]
         if not pages and not assets:
             raise ValueError("No crawlable content was found")
-        indexed_jobs = [
-            _queue_index(
+        indexed_jobs = []
+        for record in [*pages, *assets]:
+            indexed_jobs.append(_queue_index(
                 db, tenant_id=data["tenant_id"], source_id=data["source_id"], run_id=data["run_id"],
-                record=record, category=data.get("category"),
-            )
-            for record in [*pages, *assets]
-        ]
+                record=record, category=None,
+            ))
+            job.payload = {
+                **(job.payload or {}),
+                "stage": "queueing_for_classification",
+                "items_queued": len(indexed_jobs),
+                "pages_discovered": len(pages),
+                "documents_discovered": len(assets),
+            }
+            db.commit()
         get_producer().flush()
-        job.payload = {**(job.payload or {}), "selected_engine": selected_engine, "indexing_job_ids": indexed_jobs}
+        job.payload = {
+            **(job.payload or {}),
+            "stage": "indexing",
+            "selected_engine": selected_engine,
+            "indexing_job_ids": indexed_jobs,
+            "items_queued": len(indexed_jobs),
+            "pages_discovered": len(pages),
+            "documents_discovered": len(assets),
+        }
         job.status = "completed"
         source.status = "processing"
         run.status = "processing"

@@ -81,7 +81,14 @@ async def oauth_callback(state: str = Query(...), code: str = Query(...), db: Se
                 "resource": (job.payload or {}).get("resource"),
             })
         producer.flush()
-        payload = {"type": "follei:integration-connected", "provider": "google_workspace", "connection_id": str(connection.id), "run_id": str(run.id)}
+        payload = {
+            "type": "follei:integration-connected",
+            "provider": "google_workspace",
+            "connection_id": str(connection.id),
+            "run_id": str(run.id),
+            "status_url": f"/api/v1/onboarding/runs/{run.id}",
+            "events_url": f"/api/v1/onboarding/runs/{run.id}/events",
+        }
     except Exception as exc:
         logger.warning("Google Workspace OAuth callback failed: {}", type(exc).__name__)
         payload = {"type": "follei:integration-error", "provider": "google_workspace", "message": "Connection could not be completed"}
@@ -128,4 +135,7 @@ def sync_connection(
     return api_envelope({
         "connection_id": str(connection.id), "run_id": str(run.id), "status": run.status,
         "jobs": [{"id": str(job.id), "type": job.job_type, "status": job.status} for job in jobs],
+        "status_url": f"/api/v1/onboarding/runs/{run.id}",
+        "events_url": f"/api/v1/onboarding/runs/{run.id}/events",
+        "onboarding_state_url": "/api/v1/onboarding/state",
     }, accepted=True)

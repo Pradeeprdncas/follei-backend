@@ -5,6 +5,7 @@ import ipaddress
 import socket
 from collections import deque
 from pathlib import Path
+from typing import Callable
 from urllib.parse import urldefrag, urljoin, urlparse
 from urllib.robotparser import RobotFileParser
 
@@ -12,10 +13,18 @@ import aiohttp
 from aiohttp.abc import AbstractResolver
 from bs4 import BeautifulSoup
 
+from app.config.settings import get_settings
+
 USER_AGENT = "FolleiKnowledgeBot/1.0"
 MAX_PAGE_BYTES = 1_000_000
 MAX_TOTAL_BYTES = 5_000_000
 DOWNLOADABLE_EXTENSIONS = {".pdf", ".docx", ".xlsx", ".xls", ".csv", ".ppt", ".pptx", ".txt", ".eml", ".msg"}
+ProgressCallback = Callable[[dict[str, object]], None]
+
+
+def _progress(callback: ProgressCallback | None, **values: object) -> None:
+    if callback is not None:
+        callback(values)
 
 
 class _PinnedResolver(AbstractResolver):
@@ -81,7 +90,17 @@ def _extract_page(url: str, html: str) -> tuple[dict, list[str]]:
     return {"url": url, "title": title, "text": "\n".join(lines)}, links
 
 
-async def _crawl_rendered(url: str, *, max_pages: int, root_host: str, root_addresses: list[str], robots: RobotFileParser) -> list[dict]:
+async def _crawl_rendered(
+    url: str,
+    *,
+    max_pages: int,
+    max_page_bytes: int,
+    max_total_bytes: int,
+    root_host: str,
+    root_addresses: list[str],
+    robots: RobotFileParser,
+    progress_callback: ProgressCallback | None = None,
+) -> list[dict]:
     """Render JavaScript-only pages without relaxing crawler safety bounds."""
     try:
         from playwright.async_api import async_playwright
@@ -115,7 +134,7 @@ async def _crawl_rendered(url: str, *, max_pages: int, root_host: str, root_addr
         await context.route("**/*", bounded_request)
         page = await context.new_page()
         try:
-            while queue and len(pages) < max_pages and total_bytes < MAX_TOTAL_BYTES:
+            while queue and len(pages) < max_pages and total_bytes < max_total_bytes:
                 current = queue.popleft()
                 if current in seen or not robots.can_fetch(USER_AGENT, current):
                     continue
@@ -136,12 +155,19 @@ async def _crawl_rendered(url: str, *, max_pages: int, root_host: str, root_addr
                     continue
                 seen.add(final_url)
                 encoded = html.encode("utf-8")
-                if len(encoded) > MAX_PAGE_BYTES or total_bytes + len(encoded) > MAX_TOTAL_BYTES:
+                if len(encoded) > max_page_bytes or total_bytes + len(encoded) > max_total_bytes:
                     continue
                 total_bytes += len(encoded)
                 extracted, links = _extract_page(final_url, html)
                 if extracted["text"].strip():
                     pages.append(extracted)
+                    _progress(
+                        progress_callback,
+                        stage="crawling_website",
+                        pages_discovered=len(pages),
+                        documents_discovered=0,
+                        current_url=final_url,
+                    )
                 for link in links:
                     try:
                         validate_public_url(link, expected_host=root_host)
@@ -155,9 +181,24 @@ async def _crawl_rendered(url: str, *, max_pages: int, root_host: str, root_addr
     return pages
 
 
-async def crawl_website(url: str, *, max_pages: int = 25, include_assets: bool = False) -> list[dict]:
-    """Crawl HTML pages and, optionally, same-site documents within existing bounds."""
-    max_pages = max(1, min(max_pages, 25))
+async def crawl_website(
+    url: str,
+    *,
+    max_pages: int | None = None,
+    include_assets: bool = False,
+    progress_callback: ProgressCallback | None = None,
+) -> list[dict]:
+    """Crawl the same-host site until exhausted, within server safety ceilings.
+
+    ``max_pages`` remains available only for internal tests/callers. Public API
+    consumers cannot shrink or expand crawl scope.
+    """
+    settings = get_settings()
+    max_pages = settings.WEBSITE_CRAWL_PAGE_LIMIT if max_pages is None else max_pages
+    max_pages = max(1, min(max_pages, settings.WEBSITE_CRAWL_PAGE_LIMIT))
+    max_page_bytes = settings.WEBSITE_CRAWL_MAX_PAGE_BYTES
+    max_document_bytes = settings.WEBSITE_CRAWL_MAX_DOCUMENT_BYTES
+    max_total_bytes = settings.WEBSITE_CRAWL_MAX_TOTAL_BYTES
     root_host = validate_public_url(url)
     root_addresses = _public_addresses(root_host)
     timeout = aiohttp.ClientTimeout(total=20, connect=5, sock_read=10)
@@ -166,6 +207,13 @@ async def crawl_website(url: str, *, max_pages: int = 25, include_assets: bool =
     assets: list[dict] = []
     asset_urls: set[str] = set()
     connector = aiohttp.TCPConnector(resolver=_PinnedResolver(root_host, root_addresses))
+    _progress(
+        progress_callback,
+        stage="reading_robots",
+        pages_discovered=0,
+        documents_discovered=0,
+        current_url=url,
+    )
     async with aiohttp.ClientSession(timeout=timeout, headers=headers, connector=connector) as session:
         robots = RobotFileParser()
         robots.set_url(urljoin(url, "/robots.txt"))
@@ -175,7 +223,7 @@ async def crawl_website(url: str, *, max_pages: int = 25, include_assets: bool =
                 robots.parse((await response.text(errors="replace")).splitlines() if response.status == 200 else [])
         except (aiohttp.ClientError, TimeoutError):
             robots.parse([])
-        while queue and len(pages) < max_pages and total_bytes < MAX_TOTAL_BYTES:
+        while queue and len(pages) < max_pages and total_bytes < max_total_bytes:
             current = queue.popleft()
             if current in seen:
                 continue
@@ -191,13 +239,20 @@ async def crawl_website(url: str, *, max_pages: int = 25, include_assets: bool =
                         continue
                     if response.status != 200 or "text/html" not in response.headers.get("Content-Type", "").lower():
                         break
-                    body = await response.content.read(MAX_PAGE_BYTES + 1)
-                    if len(body) > MAX_PAGE_BYTES:
+                    body = await response.content.read(max_page_bytes + 1)
+                    if len(body) > max_page_bytes:
                         break
                     total_bytes += len(body)
                     page, links = _extract_page(current, body.decode(response.charset or "utf-8", errors="replace"))
                     if page["text"].strip():
                         pages.append(page)
+                        _progress(
+                            progress_callback,
+                            stage="crawling_website",
+                            pages_discovered=len(pages),
+                            documents_discovered=len(assets),
+                            current_url=current,
+                        )
                     for link in links:
                         try:
                             validate_public_url(link, expected_host=root_host)
@@ -210,10 +265,17 @@ async def crawl_website(url: str, *, max_pages: int = 25, include_assets: bool =
                                 async with session.get(link, allow_redirects=False) as asset_response:
                                     content_type = asset_response.headers.get("Content-Type", "").lower()
                                     if asset_response.status == 200 and "text/html" not in content_type:
-                                        content = await asset_response.content.read(MAX_PAGE_BYTES + 1)
-                                        if len(content) <= MAX_PAGE_BYTES and total_bytes + len(content) <= MAX_TOTAL_BYTES:
+                                        content = await asset_response.content.read(max_document_bytes + 1)
+                                        if len(content) <= max_document_bytes and total_bytes + len(content) <= max_total_bytes:
                                             total_bytes += len(content)
                                             assets.append({"url": link, "title": Path(urlparse(link).path).name or "website-asset", "filename": Path(urlparse(link).path).name or f"website-asset{suffix}", "file_type": suffix.lstrip("."), "content": content})
+                                            _progress(
+                                                progress_callback,
+                                                stage="downloading_documents",
+                                                pages_discovered=len(pages),
+                                                documents_discovered=len(assets),
+                                                current_url=link,
+                                            )
                             except (aiohttp.ClientError, TimeoutError):
                                 pass
                         elif link not in seen:
@@ -221,5 +283,14 @@ async def crawl_website(url: str, *, max_pages: int = 25, include_assets: bool =
                     break
     if pages:
         return pages + assets
-    rendered = await _crawl_rendered(url, max_pages=max_pages, root_host=root_host, root_addresses=root_addresses, robots=robots)
+    rendered = await _crawl_rendered(
+        url,
+        max_pages=max_pages,
+        max_page_bytes=max_page_bytes,
+        max_total_bytes=max_total_bytes,
+        root_host=root_host,
+        root_addresses=root_addresses,
+        robots=robots,
+        progress_callback=progress_callback,
+    )
     return rendered + assets

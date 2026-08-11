@@ -16,6 +16,7 @@ from app.models.knowledge.ingestion import IngestionRun, SourceIngestionJob
 from app.services.integrations.google_workspace import GoogleWorkspaceOAuthService
 from app.services.knowledge.object_storage import store_source
 from app.services.knowledge.ingestion_retry import IngestionJobFailed, publish_ingestion_retry, record_ingestion_failure
+from app.services.knowledge.run_status import reconcile_ingestion_run
 
 
 _settings = get_settings()
@@ -35,11 +36,14 @@ async def process_google_job(data: dict) -> None:
     resource = data["resource"]
     try:
         job.status = "running"; job.attempt += 1; run.status = "running"
+        job.payload = {**(job.payload or {}), "stage": "fetching", "resource": resource, "record_count": 0}
         db.commit()
         service = GoogleWorkspaceOAuthService()
         token = await service.valid_access_token(db, connection)
         cursors = dict(connection.sync_cursors or {})
         records, cursor = await service.fetch_resource(token, resource, cursor=cursors.get(resource))
+        job.payload = {**(job.payload or {}), "stage": "queueing_for_classification", "record_count": len(records)}
+        db.commit()
         path = Path(UPLOAD_DIR) / f"google-{job.id}.json"
         path.write_text(json.dumps({"resource": resource, "records": records}, ensure_ascii=False), encoding="utf-8")
         index_id = uuid4()
@@ -59,11 +63,16 @@ async def process_google_job(data: dict) -> None:
         connection.last_synced_at = datetime.utcnow()
         connection.last_error = None
         job.status = "completed"
-        job.payload = {**(job.payload or {}), "record_count": len(records), "indexing_job_id": str(index_id)}
-        completed = db.query(SourceIngestionJob).filter(SourceIngestionJob.run_id == run.id, SourceIngestionJob.id != job.id, SourceIngestionJob.status != "completed").first() is None
-        run.status = "processing" if completed else "running"
+        job.payload = {
+            **(job.payload or {}),
+            "stage": "indexing",
+            "record_count": len(records),
+            "items_queued": 1,
+            "indexing_job_id": str(index_id),
+        }
         run.document_count = sum(item.status == "completed" for item in db.query(SourceIngestionJob).filter(SourceIngestionJob.run_id == run.id).all())
         db.commit()
+        reconcile_ingestion_run(db, run)
     except Exception as exc:
         failure = record_ingestion_failure(
             job, run, exc,
@@ -72,6 +81,7 @@ async def process_google_job(data: dict) -> None:
         )
         connection.last_error = failure.error
         db.commit()
+        reconcile_ingestion_run(db, run)
         raise IngestionJobFailed(failure) from exc
     finally:
         db.close()

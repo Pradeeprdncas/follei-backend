@@ -1,6 +1,14 @@
 import pytest
 from app.services.knowledge import website_ingestion
 from app.services.knowledge.crawlers import registry
+from app.routers.website_ingestion import WebsiteIngestRequest
+
+
+def test_public_website_contract_has_server_managed_scope_and_auto_classification():
+    properties = WebsiteIngestRequest.model_json_schema()["properties"]
+    assert set(properties) == {"url", "engine", "crawl_consent"}
+    assert "max_pages" not in properties
+    assert "category" not in properties
 
 
 def test_rejects_private_resolved_address(monkeypatch):
@@ -60,9 +68,16 @@ async def test_crawl_initializes_total_byte_counter_and_returns_page(monkeypatch
     monkeypatch.setattr(website_ingestion, "_public_addresses", lambda _host: ["93.184.216.34"])
     monkeypatch.setattr(website_ingestion.aiohttp, "ClientSession", lambda **_kwargs: _Session())
 
-    pages = await website_ingestion.crawl_website("https://example.com/", max_pages=1)
+    progress = []
+    pages = await website_ingestion.crawl_website(
+        "https://example.com/", max_pages=1, progress_callback=progress.append,
+    )
 
     assert pages == [{"url": "https://example.com/", "title": "Acme", "text": "# Pricing\nEnterprise is USD 999."}]
+    assert progress[-1] == {
+        "stage": "crawling_website", "pages_discovered": 1,
+        "documents_discovered": 0, "current_url": "https://example.com/",
+    }
 
 
 @pytest.mark.asyncio

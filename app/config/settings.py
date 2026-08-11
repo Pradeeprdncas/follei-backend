@@ -57,6 +57,13 @@ class Settings(BaseSettings):
         le=10_000,
         description="Maximum category item count rendered as individually reviewable items by default.",
     )
+    # Website crawl scope is server-controlled. Clients request "this site",
+    # never an arbitrary page count. The high ceiling prevents infinite URL
+    # spaces from exhausting a worker while allowing normal sites to finish.
+    WEBSITE_CRAWL_PAGE_LIMIT: int = Field(default=10_000, ge=1, le=100_000)
+    WEBSITE_CRAWL_MAX_TOTAL_BYTES: int = Field(default=500_000_000, ge=1_000_000)
+    WEBSITE_CRAWL_MAX_PAGE_BYTES: int = Field(default=2_000_000, ge=100_000)
+    WEBSITE_CRAWL_MAX_DOCUMENT_BYTES: int = Field(default=25_000_000, ge=100_000)
     AI_MODELS: str = Field(default="AI_MODELS", description="Canonical local AI model root")
     # Local response generation. llama.cpp exposes an OpenAI-compatible API,
     # keeping model runtime concerns outside the FastAPI worker process.

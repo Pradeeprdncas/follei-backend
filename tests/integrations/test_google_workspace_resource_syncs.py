@@ -135,6 +135,11 @@ async def test_each_google_workspace_resource_worker_succeeds_independently(monk
     monkeypatch.setattr(worker, "UPLOAD_DIR", tmp_path)
     monkeypatch.setattr(worker, "store_source", lambda *_args, **_kwargs: "object-key")
     monkeypatch.setattr(worker, "get_producer", lambda: producer)
+    monkeypatch.setattr(
+        worker,
+        "reconcile_ingestion_run",
+        lambda _db, selected_run: setattr(selected_run, "status", "processing"),
+    )
 
     await worker.process_google_job(data)
 
