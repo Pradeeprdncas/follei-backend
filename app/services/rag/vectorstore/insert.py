@@ -20,6 +20,11 @@ def insert_chunks(chunk_ids: list[str], embeddings: list[list[float]], payloads:
 
     points = []
     for cid, vec, payload in zip(chunk_ids, embeddings, payloads):
+        if len(vec) != _settings.QDRANT_VECTOR_SIZE:
+            raise ValueError(
+                f"Embedding dimension mismatch for model {embedding_model_name()}: "
+                f"expected {_settings.QDRANT_VECTOR_SIZE}, received {len(vec)}"
+            )
         vector_payload = {**payload, "embedding_model": embedding_model_name()}
         points.append(
             PointStruct(

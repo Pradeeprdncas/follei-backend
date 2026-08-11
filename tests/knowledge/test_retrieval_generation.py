@@ -85,6 +85,7 @@ def test_every_qdrant_insert_gets_shared_embedding_model(monkeypatch):
 
     monkeypatch.setattr(insert_module, "get_qdrant", lambda: Client())
     monkeypatch.setattr(insert_module, "embedding_model_name", lambda: "shared-embedding-v1")
+    monkeypatch.setattr(insert_module._settings, "QDRANT_VECTOR_SIZE", 3)
     insert_module.insert_chunks(
         [str(uuid4()), str(uuid4())],
         [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
@@ -92,6 +93,22 @@ def test_every_qdrant_insert_gets_shared_embedding_model(monkeypatch):
     )
 
     assert {point.payload["embedding_model"] for point in captured["points"]} == {"shared-embedding-v1"}
+
+
+def test_qdrant_collection_dimension_mismatch_fails_before_workers_start(monkeypatch):
+    from app.services.rag.vectorstore import qdrant as qdrant_module
+
+    class Client:
+        def get_collection(self, _name):
+            return SimpleNamespace(
+                config=SimpleNamespace(params=SimpleNamespace(vectors=SimpleNamespace(size=768)))
+            )
+
+    monkeypatch.setattr(qdrant_module, "get_qdrant", lambda: Client())
+    monkeypatch.setattr(qdrant_module._settings, "QDRANT_COLLECTION_NAME", "wrong-size")
+    monkeypatch.setattr(qdrant_module._settings, "QDRANT_VECTOR_SIZE", 1024)
+    with pytest.raises(RuntimeError, match="has vector dimension 768"):
+        qdrant_module.ensure_collection()
 
 
 @pytest.mark.asyncio

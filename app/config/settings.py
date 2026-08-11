@@ -47,6 +47,10 @@ class Settings(BaseSettings):
     MISTRAL_API_BASE: str = "https://api.mistral.ai/v1"
     MISTRAL_REQUEST_TIMEOUT_SECONDS: float = 60.0
     MISTRAL_EMBEDDING_BATCH_SIZE: int = 32
+    AUTH_OTP_TTL_SECONDS: int = Field(default=300, ge=60, le=900)
+    AUTH_OTP_REQUEST_LIMIT: int = Field(default=3, ge=1, le=20)
+    AUTH_OTP_VERIFY_LIMIT: int = Field(default=5, ge=1, le=20)
+    AUTH_OTP_RATE_WINDOW_SECONDS: int = Field(default=600, ge=60, le=3600)
     ENUMERABLE_THRESHOLD: int = Field(
         default=25,
         ge=1,

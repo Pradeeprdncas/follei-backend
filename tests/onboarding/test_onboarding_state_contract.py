@@ -19,6 +19,8 @@ from app.core.security import get_authenticated_tenant_id
 from app.models.knowledge.document import Document, KnowledgeSource
 from app.models.knowledge.fact_draft import BusinessFactDraft
 from app.models.knowledge.ingestion import CategorySummary
+from app.models.knowledge.ingestion import IngestionRun, SourceIngestionJob
+from app.models.knowledge.indexing_job import IndexingJob
 from app.models.tenancy import Tenant
 from app.routers.onboarding_state import router
 from app.services.knowledge.categories import CATEGORY_DEFINITIONS
@@ -105,6 +107,47 @@ def test_onboarding_state_is_tenant_isolated(onboarding_client):
     assert "https://b.example" not in serialized
     assert state["sources"][0]["config"]["url"] == "https://a.example"
     assert str(tenant_a.id) not in state["sources"][0]
+
+
+def test_onboarding_state_surfaces_downstream_ingestion_job_failures(onboarding_client):
+    client, tenant_a, _tenant_b, source_a, _source_b = onboarding_client
+    database_url = os.environ["TEST_DATABASE_URL"]
+    engine = create_engine(database_url)
+    Session = sessionmaker(bind=engine)
+    with Session() as db:
+        run = IngestionRun(
+            id=uuid.uuid4(), tenant_id=tenant_a.id, source_id=source_a.id,
+            status="failed", error="One or more indexing jobs failed",
+        )
+        crawl = SourceIngestionJob(
+            id=uuid.uuid4(), tenant_id=tenant_a.id, run_id=run.id,
+            job_type="website_crawl", target="https://a.example",
+            status="completed", attempt=1,
+        )
+        indexing = IndexingJob(
+            id=uuid.uuid4(), tenant_id=tenant_a.id, status="dead_lettered",
+            attempt_count=3, last_error="Vector dimension mismatch",
+            payload={"source_metadata": {"ingestion_run_id": str(run.id)}},
+        )
+        db.add_all([run, crawl, indexing])
+        db.commit()
+        run_id = str(run.id)
+        crawl_id = str(crawl.id)
+        indexing_id = str(indexing.id)
+
+    state = client.get("/api/v1/onboarding/state").json()["data"]
+    row = next(item for item in state["runs"] if item["id"] == run_id)
+    assert row["status"] == "failed"
+    assert row["jobs"] == [
+        {
+            "id": crawl_id, "type": "website_crawl", "status": "completed",
+            "attempt": 1, "error": None,
+        },
+        {
+            "id": indexing_id, "type": "document_indexing", "status": "dead_lettered",
+            "attempt": 3, "error": "Vector dimension mismatch",
+        },
+    ]
 
 
 def test_category_items_are_paginated_and_tenant_isolated(onboarding_client):

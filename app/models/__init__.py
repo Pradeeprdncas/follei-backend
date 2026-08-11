@@ -5,6 +5,7 @@ any query is executed, preventing relationship names from resolving to a stale
 legacy model.
 """
 from app.models.tenancy import Tenant, User
+from app.models.auth_otp import AuthOtpChallenge
 from app.models.agents.agent import Agent
 from app.models.conversations.conversation import Conversation, Message, ConversationCitation
 from app.models.conversations.interaction import Interaction
@@ -34,4 +35,4 @@ from app.models.crm import CRMRecord, CRMSyncRun, TenantCRMConnection
 from app.domains.lead_import.models import LeadImportJob, LeadImportRow
 from app.analysis.models.conversation_analysis import ConversationAnalysis
 
-__all__ = ["Tenant", "User", "Agent", "Conversation", "Message", "ConversationCitation", "Interaction", "Customer", "IntegrationConnection", "EmailOAuthState", "TenantEmailConnection", "IntegrationOAuthState", "GoogleWorkspaceConnection", "OAuthLoginExchange", "TenantChannelConnection", "ChannelComplianceAcknowledgement", "Lead", "Campaign", "KnowledgeBase", "KnowledgeSource", "Document", "Chunk", "BusinessFactDraft", "Entity", "EntityRelation", "KnowledgeSyncEvent", "IndexingJob", "IngestionRun", "SourceIngestionJob", "CategorySummary", "OnboardingConfirmation", "OnboardingProfile", "OnboardingContactChannel", "OnboardingGoal", "BusinessPlan", "CustomerSegment", "SLA", "LearningSignal", "FlowDefinition", "FlowVersion", "FlowEnrollment", "FlowExecutionStep", "CommunicationAsset", "WorkflowTemplate", "TenantWorkflowInstance", "WorkflowApproval", "TenantCRMConnection", "CRMRecord", "CRMSyncRun", "LeadImportJob", "LeadImportRow", "ConversationAnalysis"]
+__all__ = ["Tenant", "User", "AuthOtpChallenge", "Agent", "Conversation", "Message", "ConversationCitation", "Interaction", "Customer", "IntegrationConnection", "EmailOAuthState", "TenantEmailConnection", "IntegrationOAuthState", "GoogleWorkspaceConnection", "OAuthLoginExchange", "TenantChannelConnection", "ChannelComplianceAcknowledgement", "Lead", "Campaign", "KnowledgeBase", "KnowledgeSource", "Document", "Chunk", "BusinessFactDraft", "Entity", "EntityRelation", "KnowledgeSyncEvent", "IndexingJob", "IngestionRun", "SourceIngestionJob", "CategorySummary", "OnboardingConfirmation", "OnboardingProfile", "OnboardingContactChannel", "OnboardingGoal", "BusinessPlan", "CustomerSegment", "SLA", "LearningSignal", "FlowDefinition", "FlowVersion", "FlowEnrollment", "FlowExecutionStep", "CommunicationAsset", "WorkflowTemplate", "TenantWorkflowInstance", "WorkflowApproval", "TenantCRMConnection", "CRMRecord", "CRMSyncRun", "LeadImportJob", "LeadImportRow", "ConversationAnalysis"]

@@ -1,22 +1,31 @@
+import hashlib
+import hmac
 import re
+import secrets
 from datetime import datetime, timedelta, timezone
 from typing import Any
 from uuid import UUID, uuid4
 
-from fastapi import APIRouter, Body, Depends, HTTPException, Query, Response, status
+from fastapi import APIRouter, BackgroundTasks, Body, Depends, HTTPException, Query, Response, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
-from sqlalchemy import text
+from sqlalchemy import func, text
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.core.security import create_access_token, decode_access_token, hash_password, verify_password
+from app.config.settings import get_settings
 from app.database.session import get_db
+from app.models.auth_otp import AuthOtpChallenge
+from app.models.tenancy import User
 
 
 router = APIRouter(prefix="/api/v1")
 bearer_scheme = HTTPBearer(auto_error=False)
 TOKEN_EXPIRES_IN = 3600
+_settings = get_settings()
+_OTP_GENERIC_MESSAGE = "If an account exists, a sign-in code has been sent."
+_OTP_INVALID_MESSAGE = "Invalid or expired sign-in code"
 
 
 class FlexibleModel(BaseModel):
@@ -53,6 +62,16 @@ class RegisterResponse(BaseModel):
 class LoginRequest(FlexibleModel):
     email: EmailStr
     password: str
+
+
+class OtpRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    email: EmailStr
+
+
+class OtpVerifyRequest(OtpRequest):
+    code: str = Field(..., pattern=r"^[0-9]{6}$")
 
 
 class RefreshRequest(FlexibleModel):
@@ -264,6 +283,48 @@ def _token_pair(user_id: UUID, tenant_id: UUID) -> dict[str, Any]:
     }
 
 
+def _normalized_email(email: str) -> str:
+    return email.strip().lower()
+
+
+def _email_hash(email: str) -> str:
+    return hmac.new(
+        _settings.SECRET_KEY.encode("utf-8"),
+        f"auth-otp-email:{_normalized_email(email)}".encode("utf-8"),
+        hashlib.sha256,
+    ).hexdigest()
+
+
+def _otp_hash(challenge_id: UUID, code: str) -> str:
+    return hmac.new(
+        _settings.SECRET_KEY.encode("utf-8"),
+        f"auth-otp-code:{challenge_id}:{code}".encode("utf-8"),
+        hashlib.sha256,
+    ).hexdigest()
+
+
+async def _deliver_login_otp(email: str, code: str) -> None:
+    """Deliver without logging or persisting the plaintext code."""
+    from app.services.communications.email_provider import EmailProvider
+
+    result = await EmailProvider().send_email(
+        to_email=email,
+        to_name="Follei user",
+        subject="Your Follei sign-in code",
+        body=f"Your Follei sign-in code is {code}. It expires in {_settings.AUTH_OTP_TTL_SECONDS // 60} minutes.",
+        html_body=(
+            "<p>Your Follei sign-in code is:</p>"
+            f"<p style=\"font-size:24px;font-weight:700;letter-spacing:4px\">{code}</p>"
+            f"<p>It expires in {_settings.AUTH_OTP_TTL_SECONDS // 60} minutes and can only be used once.</p>"
+        ),
+    )
+    if not result.get("success"):
+        # Do not put the address or code in logs. The public request response
+        # remains generic so provider failures cannot reveal account presence.
+        from loguru import logger
+        logger.error("Passwordless sign-in email delivery failed")
+
+
 def _current_user(
     credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
     db: Session = Depends(get_db),
@@ -413,6 +474,106 @@ def login(payload: LoginRequest, db: Session = Depends(get_db)) -> dict[str, Any
             "full_name": user.get("full_name") or f"{user.get('first_name', '')} {user.get('last_name', '')}".strip(),
             "tenant_id": str(user["tenant_id"]),
             "roles": _roles_for_user(db, user["id"], user.get("role")),
+        },
+    }
+
+
+@router.post("/auth/otp/request", tags=["Domain 1 - Auth"])
+def request_login_otp(
+    payload: OtpRequest,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Issue a passwordless code without disclosing whether an account exists."""
+    email = _normalized_email(str(payload.email))
+    email_hash = _email_hash(email)
+    now = datetime.utcnow()
+    window_start = now - timedelta(seconds=_settings.AUTH_OTP_RATE_WINDOW_SECONDS)
+    recent_requests = db.query(func.count(AuthOtpChallenge.id)).filter(
+        AuthOtpChallenge.email_hash == email_hash,
+        AuthOtpChallenge.created_at >= window_start,
+    ).scalar() or 0
+
+    response = {
+        "message": _OTP_GENERIC_MESSAGE,
+        "expires_in": _settings.AUTH_OTP_TTL_SECONDS,
+    }
+    # Request throttling deliberately uses the same 200 response body. A
+    # different status would reveal whether an address is generating mail.
+    if int(recent_requests) >= _settings.AUTH_OTP_REQUEST_LIMIT:
+        return response
+
+    user = db.query(User).filter(func.lower(User.email) == email).first()
+    eligible_user = user if user and user.is_active is not False and user.status != "inactive" else None
+    challenge_id = uuid4()
+    code = f"{secrets.randbelow(1_000_000):06d}"
+    db.add(AuthOtpChallenge(
+        id=challenge_id,
+        email_hash=email_hash,
+        user_id=eligible_user.id if eligible_user else None,
+        code_hash=_otp_hash(challenge_id, code),
+        expires_at=now + timedelta(seconds=_settings.AUTH_OTP_TTL_SECONDS),
+        created_at=now,
+    ))
+    db.commit()
+    if eligible_user:
+        background_tasks.add_task(_deliver_login_otp, email, code)
+    return response
+
+
+@router.post("/auth/otp/verify", tags=["Domain 1 - Auth"])
+def verify_login_otp(payload: OtpVerifyRequest, db: Session = Depends(get_db)) -> dict[str, Any]:
+    """Consume one valid code and return the same session contract as login."""
+    email = _normalized_email(str(payload.email))
+    email_hash = _email_hash(email)
+    now = datetime.utcnow()
+    window_start = now - timedelta(seconds=_settings.AUTH_OTP_RATE_WINDOW_SECONDS)
+    failed_attempts = db.query(func.coalesce(func.sum(AuthOtpChallenge.failed_attempts), 0)).filter(
+        AuthOtpChallenge.email_hash == email_hash,
+        AuthOtpChallenge.created_at >= window_start,
+    ).scalar() or 0
+    if int(failed_attempts) >= _settings.AUTH_OTP_VERIFY_LIMIT:
+        raise HTTPException(status_code=429, detail="Too many sign-in code attempts; try again later")
+
+    challenge = db.query(AuthOtpChallenge).filter(
+        AuthOtpChallenge.email_hash == email_hash,
+    ).order_by(AuthOtpChallenge.created_at.desc(), AuthOtpChallenge.id.desc()).with_for_update().first()
+    valid = bool(
+        challenge
+        and challenge.consumed_at is None
+        and challenge.expires_at >= now
+        and hmac.compare_digest(challenge.code_hash, _otp_hash(challenge.id, payload.code))
+        and challenge.user_id is not None
+    )
+    if not valid:
+        if challenge and challenge.created_at >= window_start:
+            challenge.failed_attempts = int(challenge.failed_attempts or 0) + 1
+            challenge.last_attempt_at = now
+            db.commit()
+        raise HTTPException(status_code=401, detail=_OTP_INVALID_MESSAGE)
+
+    user = db.query(User).filter(
+        User.id == challenge.user_id,
+        func.lower(User.email) == email,
+    ).first()
+    if not user or user.is_active is False or user.status == "inactive":
+        challenge.failed_attempts = int(challenge.failed_attempts or 0) + 1
+        challenge.last_attempt_at = now
+        db.commit()
+        raise HTTPException(status_code=401, detail=_OTP_INVALID_MESSAGE)
+
+    challenge.consumed_at = now
+    challenge.last_attempt_at = now
+    user.last_login_at = now
+    db.commit()
+    return {
+        **_token_pair(user.id, user.tenant_id),
+        "user": {
+            "id": str(user.id),
+            "email": user.email,
+            "full_name": user.full_name or f"{user.first_name} {user.last_name}".strip(),
+            "tenant_id": str(user.tenant_id),
+            "roles": _roles_for_user(db, user.id, user.role),
         },
     }
 

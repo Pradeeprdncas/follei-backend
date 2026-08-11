@@ -13,8 +13,22 @@ def ensure_collection() -> None:
     client = get_qdrant()
     collection_name = _settings.QDRANT_COLLECTION_NAME
     try:
-        client.get_collection(collection_name)
-        logger.info(f"Qdrant collection '{collection_name}' already exists")
+        info = client.get_collection(collection_name)
+        vectors = info.config.params.vectors
+        actual_size = getattr(vectors, "size", None)
+        if actual_size != _settings.QDRANT_VECTOR_SIZE:
+            raise RuntimeError(
+                f"Qdrant collection '{collection_name}' has vector dimension "
+                f"{actual_size}, but QDRANT_VECTOR_SIZE is {_settings.QDRANT_VECTOR_SIZE}. "
+                "Use a new collection name or reindex the collection before starting workers."
+            )
+        logger.info(
+            "Qdrant collection '{}' already exists (dimension={})",
+            collection_name,
+            actual_size,
+        )
+    except RuntimeError:
+        raise
     except Exception:
         client.create_collection(
             collection_name=collection_name,

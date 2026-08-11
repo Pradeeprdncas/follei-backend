@@ -140,6 +140,7 @@ echo "[4/6] Reconciling the database and queue..."
   "${PYTHON}" "${ROOT_DIR}/scripts/ensure_local_postgres_access.py"
   "${PYTHON}" "${ROOT_DIR}/scripts/wait_for_kafka.py" --timeout 120
   "${PYTHON}" -m app.database.bootstrap
+  "${PYTHON}" -c "from app.services.rag.vectorstore.qdrant import ensure_collection; ensure_collection()"
 )
 
 is_running() {

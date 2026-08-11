@@ -214,6 +214,49 @@ Token fields have the meanings described in registration. `user.id` and `user.te
 - Refresh shortly before 3600 seconds. A refresh after its own expiry fails and requires sign-in.
 - On any protected endpoint's `401`, attempt refresh once; prevent parallel refresh storms with a single shared promise.
 
+### 2.1 Passwordless email-code sign-in
+
+Passwordless sign-in is an additional public option; email/password login remains available.
+
+First request a code:
+
+```http
+POST /api/v1/auth/otp/request
+Content-Type: application/json
+
+{"email":"maya@northstar.example"}
+```
+
+The only request field is required `email` (valid email string); unknown fields are rejected. Every syntactically valid request returns the same `200` response, including unknown, inactive, and request-rate-limited addresses:
+
+```json
+{
+  "message": "If an account exists, a sign-in code has been sent.",
+  "expires_in": 300
+}
+```
+
+Do not infer that an account exists from this response. Show the code entry screen and allow the user to return to ordinary password login. The default request throttle permits three issued codes per email in ten minutes; throttled requests intentionally retain the same `200` body to prevent account enumeration.
+
+Verify the six-digit code:
+
+```http
+POST /api/v1/auth/otp/verify
+Content-Type: application/json
+
+{"email":"maya@northstar.example","code":"482193"}
+```
+
+On success, the `200` response is exactly the session shape documented for `/api/v1/auth/login`: `access_token`, `refresh_token`, `token_type`, `expires_in`, and `user`. Store the session and load `GET /api/v1/onboarding/state` next. A code expires after `expires_in`, can be used once, and only the newest code for an email is accepted.
+
+| Status | Body/cause |
+|---|---|
+| `401` | `{"detail":"Invalid or expired sign-in code"}` for an incorrect, expired, consumed, unknown-account, or otherwise invalid code. |
+| `429` | `{"detail":"Too many sign-in code attempts; try again later"}` after five failed verification attempts for that email in ten minutes. |
+| `422` | Validation array for an invalid email, a code other than exactly six digits, missing fields, or unknown fields. |
+
+The OTP endpoints never require or accept a bearer token. Do not automatically retry verification after `401`; let the user correct the code. Do not automatically retry either endpoint after `429`.
+
 ---
 
 ## 3. Google OAuth registration/sign-in with automatic Workspace connection
@@ -779,7 +822,11 @@ Call after login, after creating/connecting any source, while polling ingestion,
         "status": "running",
         "page_count": 4,
         "document_count": 1,
-        "error": null
+        "error": null,
+        "jobs": [
+          {"id":"<uuid>","type":"website_crawl","status":"completed","attempt":1,"error":null},
+          {"id":"<uuid>","type":"document_indexing","status":"processing","attempt":1,"error":null}
+        ]
       }
     ],
     "category_summaries": [
@@ -858,6 +905,12 @@ The actual response always contains **all 25** category summary objects; the exa
 | `runs[].page_count` | integer | Pages processed so far/finally. |
 | `runs[].document_count` | integer | Documents processed so far/finally. |
 | `runs[].error` | string or `null` | Safe run failure summary. |
+| `runs[].jobs` | array | Crawl/provider and downstream document-indexing jobs belonging to this run. |
+| `runs[].jobs[].id` | UUID string | Worker-job correlation ID. |
+| `runs[].jobs[].type` | string | Resource/crawl job type or `document_indexing`. |
+| `runs[].jobs[].status` | string | Worker status, including `queued`, `running`/`processing`, `retrying`, `completed`/`indexed`, `failed`, or `dead_lettered`. |
+| `runs[].jobs[].attempt` | integer | Number of execution attempts. |
+| `runs[].jobs[].error` | string or `null` | Safe actionable downstream error. Show this when a run fails; it is more specific than `runs[].error`. |
 | `category_summaries[]` | array of 25 | One summary per canonical category. |
 | `category_summaries[].key` | category enum below | Stable API key. |
 | `.label` | string | Frontend-ready English label. |

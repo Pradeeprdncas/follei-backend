@@ -8,6 +8,8 @@ from sqlalchemy.orm import Session
 
 from app.models.knowledge.document import KnowledgeSource
 from app.models.knowledge.ingestion import CategorySummary, IngestionRun, OnboardingConfirmation
+from app.models.knowledge.ingestion import SourceIngestionJob
+from app.models.knowledge.indexing_job import IndexingJob
 from app.models.onboarding_profile import OnboardingProfile
 from app.services.knowledge.categories import CATEGORY_DEFINITIONS, MANDATORY_GROUPS
 
@@ -84,6 +86,26 @@ def build_onboarding_state(db: Session, tenant_id: uuid.UUID) -> dict[str, objec
     profile = db.query(OnboardingProfile).filter(OnboardingProfile.tenant_id == tenant_id).first()
     sources = db.query(KnowledgeSource).filter(KnowledgeSource.tenant_id == tenant_id).order_by(KnowledgeSource.created_at).all()
     runs = db.query(IngestionRun).filter(IngestionRun.tenant_id == tenant_id).order_by(IngestionRun.created_at.desc()).all()
+    source_jobs_by_run: dict[str, list[dict[str, object]]] = defaultdict(list)
+    for job in db.query(SourceIngestionJob).filter(SourceIngestionJob.tenant_id == tenant_id).all():
+        source_jobs_by_run[str(job.run_id)].append({
+            "id": str(job.id),
+            "type": job.job_type,
+            "status": job.status,
+            "attempt": int(job.attempt or 0),
+            "error": job.last_error,
+        })
+    indexing_jobs_by_run: dict[str, list[dict[str, object]]] = defaultdict(list)
+    for job in db.query(IndexingJob).filter(IndexingJob.tenant_id == tenant_id).all():
+        run_id = str(((job.payload or {}).get("source_metadata") or {}).get("ingestion_run_id") or "")
+        if run_id:
+            indexing_jobs_by_run[run_id].append({
+                "id": str(job.id),
+                "type": "document_indexing",
+                "status": job.status,
+                "attempt": int(job.attempt_count or 0),
+                "error": job.last_error,
+            })
     categories = _category_rows(db, tenant_id)
     confirmations = db.query(OnboardingConfirmation).filter(OnboardingConfirmation.tenant_id == tenant_id).all()
     confirmation_map = {row.requirement_key: row for row in confirmations}
@@ -128,6 +150,10 @@ def build_onboarding_state(db: Session, tenant_id: uuid.UUID) -> dict[str, objec
                 "id": str(run.id), "source_id": str(run.source_id), "status": run.status,
                 "page_count": run.page_count, "document_count": run.document_count,
                 "error": run.error,
+                "jobs": [
+                    *source_jobs_by_run.get(str(run.id), []),
+                    *indexing_jobs_by_run.get(str(run.id), []),
+                ],
             }
             for run in runs[:20]
         ],
