@@ -654,7 +654,9 @@ def get_job_status(
         duplicate_rows=job.duplicate_rows,
         invalid_rows=job.invalid_rows,
         statistics=job.statistics,
-        error_message=job.error_message,
+        # Keep the exception on LeadImportJob.error_message for operators while
+        # returning a stable, non-sensitive failure message to the frontend.
+        error_message="Lead import processing failed" if job.error_message else None,
         created_at=job.created_at,
         completed_at=job.completed_at,
     )

@@ -329,15 +329,28 @@ class LeadImportService:
         file_path: str,
         uploaded_by: str | None = None,
         progress_callback: callable = None,
+        existing_job: LeadImportJob | None = None,
+        raise_on_failure: bool = False,
     ) -> LeadImportJob:
         """Full upload -> parse -> extract -> enrich -> intelligence -> correct -> validate -> dedup -> review -> ready."""
         timings: dict[str, float] = {}
-        job = self.repo.create_job(
-            tenant_id=tenant_id,
-            filename=filename,
-            file_type=file_type,
-            uploaded_by=uploaded_by,
-        )
+        if existing_job is not None:
+            if existing_job.tenant_id != tenant_id:
+                raise ValueError("Lead import job is not owned by this tenant")
+            job = existing_job
+            # Celery retries reuse the canonical job. Remove partially persisted
+            # preview rows before restarting so a retry cannot duplicate them.
+            self.repo.delete_rows(job.id)
+            job.status = ImportStatus.PENDING
+            job.error_message = None
+            job.completed_at = None
+        else:
+            job = self.repo.create_job(
+                tenant_id=tenant_id,
+                filename=filename,
+                file_type=file_type,
+                uploaded_by=uploaded_by,
+            )
         # The upload endpoint returns this job ID and immediately performs a
         # second request for its status. Persist the job before processing so
         # it cannot disappear when the request-scoped session closes.
@@ -482,6 +495,8 @@ class LeadImportService:
             )
             self.repo.db.commit()
             self.repo.db.refresh(job)
+            if raise_on_failure:
+                raise
 
         return job
 

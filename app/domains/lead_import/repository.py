@@ -2,7 +2,7 @@
 
 from uuid import UUID
 from sqlalchemy.orm import Session
-from sqlalchemy import select, func, or_
+from sqlalchemy import delete, select, func, or_
 from typing import Any
 
 from app.domains.lead_import.models import LeadImportJob, LeadImportRow
@@ -88,6 +88,11 @@ class LeadImportRepository:
         self.db.add_all(models)
         self.db.flush()
         return models
+
+    def delete_rows(self, job_id: UUID) -> None:
+        """Clear partial preview rows before retrying the same canonical job."""
+        self.db.execute(delete(LeadImportRow).where(LeadImportRow.job_id == job_id))
+        self.db.flush()
 
     def get_rows_by_job(self, job_id: UUID, status: str | None = None, limit: int | None = None) -> list[LeadImportRow]:
         stmt = select(LeadImportRow).where(LeadImportRow.job_id == job_id).order_by(LeadImportRow.row_index)

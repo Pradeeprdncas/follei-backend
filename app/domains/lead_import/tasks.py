@@ -31,6 +31,9 @@ def process_import_task(self, job_id_str: str, tenant_id_str: str, filename: str
     try:
         repo = LeadImportRepository(db)
         svc = LeadImportService(repo)
+        job = repo.get_job(job_id)
+        if not job or job.tenant_id != tenant_id:
+            raise ValueError("Unknown or cross-tenant lead import job")
         total_stages = 9  # parse, extract, enrich, intelligence, correct, validate, dedup, review, finalize
         stage_weights = [0.10, 0.20, 0.10, 0.10, 0.05, 0.10, 0.15, 0.10, 0.10]
         start = time.time()
@@ -54,6 +57,8 @@ def process_import_task(self, job_id_str: str, tenant_id_str: str, filename: str
                 file_path=file_path,
                 uploaded_by=None,
                 progress_callback=progress,
+                existing_job=job,
+                raise_on_failure=True,
             ))
         finally:
             loop.close()

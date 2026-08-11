@@ -17,6 +17,19 @@ from app.services.knowledge.categories import CATEGORY_DEFINITIONS, MANDATORY_GR
 VALID_RESOLUTIONS = {"provided", "not_applicable", "confidential", "continue_without"}
 
 
+def _client_job_error(job_type: str, error: str | None) -> str | None:
+    """Map internal worker diagnostics to stable frontend-safe messages."""
+    if not error:
+        return None
+    if job_type.startswith("google_"):
+        return "Google Workspace sync failed"
+    if job_type == "hubspot_sync":
+        return "HubSpot sync failed"
+    if job_type == "website_crawl":
+        return "Website ingestion failed"
+    return "Knowledge ingestion failed"
+
+
 def _category_rows(db: Session, tenant_id: uuid.UUID) -> list[dict[str, object]]:
     stored = {
         row.category_key: row
@@ -93,7 +106,7 @@ def build_onboarding_state(db: Session, tenant_id: uuid.UUID) -> dict[str, objec
             "type": job.job_type,
             "status": job.status,
             "attempt": int(job.attempt or 0),
-            "error": job.last_error,
+            "error": _client_job_error(job.job_type, job.last_error),
         })
     indexing_jobs_by_run: dict[str, list[dict[str, object]]] = defaultdict(list)
     for job in db.query(IndexingJob).filter(IndexingJob.tenant_id == tenant_id).all():
@@ -104,7 +117,7 @@ def build_onboarding_state(db: Session, tenant_id: uuid.UUID) -> dict[str, objec
                 "type": "document_indexing",
                 "status": job.status,
                 "attempt": int(job.attempt_count or 0),
-                "error": job.last_error,
+                "error": "Document indexing failed" if job.last_error else None,
             })
     categories = _category_rows(db, tenant_id)
     confirmations = db.query(OnboardingConfirmation).filter(OnboardingConfirmation.tenant_id == tenant_id).all()
@@ -149,7 +162,7 @@ def build_onboarding_state(db: Session, tenant_id: uuid.UUID) -> dict[str, objec
             {
                 "id": str(run.id), "source_id": str(run.source_id), "status": run.status,
                 "page_count": run.page_count, "document_count": run.document_count,
-                "error": run.error,
+                "error": "Knowledge ingestion failed" if run.error else None,
                 "jobs": [
                     *source_jobs_by_run.get(str(run.id), []),
                     *indexing_jobs_by_run.get(str(run.id), []),

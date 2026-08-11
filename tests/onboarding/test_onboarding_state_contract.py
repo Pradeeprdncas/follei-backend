@@ -145,9 +145,10 @@ def test_onboarding_state_surfaces_downstream_ingestion_job_failures(onboarding_
         },
         {
             "id": indexing_id, "type": "document_indexing", "status": "dead_lettered",
-            "attempt": 3, "error": "Vector dimension mismatch",
+            "attempt": 3, "error": "Document indexing failed",
         },
     ]
+    assert "Vector dimension mismatch" not in str(row)
 
 
 def test_category_items_are_paginated_and_tenant_isolated(onboarding_client):

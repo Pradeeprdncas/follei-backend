@@ -41,6 +41,14 @@ async def process_hubspot_job(data: dict) -> None:
             ingestion_job, ingestion_run, exc,
             max_attempts=_settings.KAFKA_INGESTION_MAX_ATTEMPTS,
         )
+        # Failures can occur before sync_hubspot() takes ownership (for
+        # example during OAuth token refresh). Keep every canonical control
+        # record diagnostic instead of leaving CRMSyncRun looking queued.
+        connection.last_error = failure.error
+        crm_run.status = "retrying" if failure.retryable else "failed"
+        crm_run.error = failure.error
+        if not failure.retryable:
+            crm_run.completed_at = datetime.utcnow()
         source.status = "retrying" if failure.retryable else "failed"
         if not failure.retryable:
             ingestion_run.completed_at = datetime.utcnow()

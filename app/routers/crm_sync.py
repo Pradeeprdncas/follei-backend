@@ -73,7 +73,9 @@ def _connection_payload(row: TenantCRMConnection) -> CRMConnectionResponse:
         id=str(row.id), provider=row.provider, status=row.status,
         external_account_id=row.external_account_id, scopes=list(row.scopes or []),
         last_synced_at=row.last_synced_at.isoformat() if row.last_synced_at else None,
-        last_error=row.last_error,
+        # Detailed provider errors remain on the internal connection/run rows.
+        # The public contract exposes a stable message without provider details.
+        last_error="HubSpot sync failed" if row.last_error else None,
     )
 
 
@@ -144,4 +146,4 @@ def list_records(object_type: str | None = Query(default=None, pattern="^(contac
 @router.get("/sync-runs")
 def list_sync_runs(limit: int = Query(default=50, ge=1, le=200), db: Session = Depends(get_db), tenant_id: str = Depends(get_authenticated_tenant_id)):
     rows = db.query(CRMSyncRun).filter_by(tenant_id=UUID(tenant_id), provider="hubspot").order_by(CRMSyncRun.started_at.desc()).limit(limit).all()
-    return [{"id": str(row.id), "status": row.status, "resources": row.requested_resources, "object_counts": row.object_counts, "projection_event_count": len(row.event_ids or []), "error": row.error, "started_at": row.started_at.isoformat(), "completed_at": row.completed_at.isoformat() if row.completed_at else None} for row in rows]
+    return [{"id": str(row.id), "status": row.status, "resources": row.requested_resources, "object_counts": row.object_counts, "projection_event_count": len(row.event_ids or []), "error": "HubSpot sync failed" if row.error else None, "started_at": row.started_at.isoformat(), "completed_at": row.completed_at.isoformat() if row.completed_at else None} for row in rows]

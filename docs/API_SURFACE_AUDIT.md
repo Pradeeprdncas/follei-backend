@@ -1,6 +1,6 @@
 # Mounted API Surface Audit
 
-Audit date: 2026-08-10. Classifications below are generated and verified against
+Audit date: 2026-08-11. Classifications below are generated and verified against
 the application's OpenAPI schema, not inferred from filenames.
 
 ## Decision vocabulary

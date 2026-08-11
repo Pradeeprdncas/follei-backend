@@ -93,7 +93,16 @@ async def oauth_callback(state: str = Query(...), code: str = Query(...), db: Se
 @router.get("/connections")
 def connections(db: Session = Depends(get_db), tenant_id: str = Depends(get_authenticated_tenant_id)):
     rows = db.query(GoogleWorkspaceConnection).filter(GoogleWorkspaceConnection.tenant_id == UUID(tenant_id)).all()
-    return api_envelope({"connections": [{"id": str(row.id), "email": row.email_address, "status": row.status, "resources": row.enabled_resources, "last_synced_at": row.last_synced_at.isoformat() if row.last_synced_at else None, "last_error": row.last_error} for row in rows]})
+    return api_envelope({"connections": [{
+        "id": str(row.id),
+        "email": row.email_address,
+        "status": row.status,
+        "resources": row.enabled_resources,
+        "last_synced_at": row.last_synced_at.isoformat() if row.last_synced_at else None,
+        # Provider exceptions are retained on the PostgreSQL connection/job/run
+        # records for operators.  Never echo them into a tenant-facing payload.
+        "last_error": "Google Workspace sync failed" if row.last_error else None,
+    } for row in rows]})
 
 
 @router.post("/connections/{connection_id}/sync", status_code=status.HTTP_202_ACCEPTED)

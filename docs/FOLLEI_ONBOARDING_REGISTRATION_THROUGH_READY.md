@@ -156,8 +156,9 @@ origin before trusting it:
 
 If the browser blocks the popup, ask the user to allow it and retry. Do not
 advance merely because the popup closed; require the success message or confirm
-the connection through `GET .../connections`. A connected account can be
-resynced later with
+the connection through
+`GET /api/v1/integrations/google-workspace/connections`. A connected account
+can be resynced later with
 `POST /api/v1/integrations/google-workspace/connections/{connection_id}/sync`.
 
 ### Website knowledge connection — direct call
@@ -185,16 +186,20 @@ polling timer.
 Render progress from:
 
 - `sources[]`: what is connected and each source's status.
-- `runs[]`: the most recent runs, their status, counts, and safe error.
+- `runs[]`: the most recent runs, their status, counts, and stable safe error.
 - `progress.runs_active`: runs currently `queued`, `running`, or `retrying`.
 - `progress.categories_found` and `category_summaries[]`: usable knowledge
   appearing as ingestion completes.
 
 Stop automatic polling when `progress.runs_active === 0`. Then route to review
 even if optional categories are missing. A run with `failed` status and an
-`error` is terminal for that run: show it alongside successful sources. Google
-can be retried with the connection sync endpoint. A failed website crawl is
-retried by submitting a new website ingestion request, which creates a new run.
+`error` is terminal for that run: show it alongside successful sources. These
+are deliberately generic client messages (`Google Workspace sync failed`,
+`HubSpot sync failed`, `Website ingestion failed`, or `Knowledge ingestion
+failed`); detailed exceptions stay in internal PostgreSQL job/run records.
+Google can be retried with the connection sync endpoint. A failed website crawl
+is retried by submitting a new website ingestion request, which creates a new
+run.
 
 Do not wait for all 25 categories. Some are optional, and readiness is based on
 mandatory groups rather than every individual category.
@@ -274,11 +279,14 @@ For a quick client-side decision preview, submit the CSV to authenticated
 `POST /api/leads/import/preview`. It returns row errors and the tenant's resolved
 contactability policy without writing leads.
 
-Create the real job with `POST /api/leads/import/upload` using multipart
-`tenant_id` and `file`. The supplied tenant ID must match the bearer token. Poll
-`GET /api/leads/import/{job_id}` through `pending`, `processing`, `parsing`,
-`extracting`, and `validating`; move to review at `preview_ready`, and stop on
-`failed`.
+Create the real reviewable job with `POST /api/leads/import/upload` using
+multipart `tenant_id` and `file`. The supplied tenant ID must match the bearer
+token. In the currently mounted implementation, upload processing runs before
+this request returns, so the normal response is already `preview_ready` or
+`failed`; the persisted lifecycle still records `pending`, `parsing`,
+`extracting`, and `validating`. Use `GET /api/leads/import/{job_id}` to resume or
+refresh a known job. If processing is moved behind the existing worker task in
+a later deployment, poll this endpoint while its status is non-terminal.
 
 Load `GET /api/leads/import/{job_id}/preview`. Correct rows with
 `PUT /api/leads/import/{job_id}/rows/{row_id}`, ignore individual rows with
@@ -291,8 +299,10 @@ The batch uses partial acceptance: invalid contact rows are rejected
 individually, but at least 50 accepted rows must remain. A `422` policy response
 means the user must correct/add enough rows or upload another file. A `409`
 preview/commit response means the job is not ready or is already in an
-incompatible state. A successful commit returns counts, rejected rows, the
-resolved tenant policy, and flow-enrollment status.
+incompatible state. A failed job returns the stable client message `Lead import
+processing failed`; its detailed exception is intentionally operator-only. A
+successful commit returns counts, rejected rows, the resolved tenant policy,
+and flow-enrollment status.
 
 Advance after commit succeeds, or immediately if the user explicitly skips
 lead import.
