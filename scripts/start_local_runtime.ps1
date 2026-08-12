@@ -94,6 +94,13 @@ if (-not $health -or $health.status -ne "healthy") {
 }
 
 Write-Host "[OK] Follei core runtime is healthy. Logs and PID files: $runtimeDir"
+foreach ($service in $services) {
+    $pidFile = Join-Path $runtimeDir "$($service.LogStem).pid"
+    $pidValue = Get-Content -LiteralPath $pidFile -ErrorAction SilentlyContinue | Select-Object -First 1
+    if (-not $pidValue -or -not (Get-Process -Id $pidValue -ErrorAction SilentlyContinue)) {
+        throw "$($service.Name) exited during startup. Review logs\runtime\$($service.LogStem).err.log."
+    }
+}
 if (-not $NoOpen) {
     Start-Process "http://127.0.0.1:$Port/docs"
 }

@@ -35,7 +35,7 @@ def record_ingestion_failure(
     failed attempt below ``max_attempts`` is retryable; the final failed attempt
     is terminal and is explicitly marked ``dead_lettered``.
     """
-    message = str(error)[:4000]
+    message = (str(error).strip() or type(error).__name__)[:4000]
     retryable = int(job.attempt or 0) < max_attempts
     job.status = "retrying" if retryable else "dead_lettered"
     job.last_error = message

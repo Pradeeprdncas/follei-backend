@@ -25,6 +25,21 @@ def test_rejects_credentials_and_cross_domain(monkeypatch):
         website_ingestion.validate_public_url("https://other.example/page", expected_host="example.com")
 
 
+def test_accepts_only_apex_www_alias_as_same_site(monkeypatch):
+    monkeypatch.setattr(website_ingestion, "_public_addresses", lambda _host: ["93.184.216.34"])
+
+    assert website_ingestion.validate_public_url(
+        "https://www.example.com/page", expected_host="example.com"
+    ) == "www.example.com"
+    assert website_ingestion.validate_public_url(
+        "https://example.com/page", expected_host="www.example.com"
+    ) == "example.com"
+    with pytest.raises(ValueError, match="leave"):
+        website_ingestion.validate_public_url(
+            "https://shop.example.com/page", expected_host="example.com"
+        )
+
+
 def test_extracts_heading_text_and_same_page_links():
     page, links = website_ingestion._extract_page("https://example.com/", "<title>Acme</title><h1>Pricing</h1><p>Enterprise is USD 999.</p><a href='/policy'>Policy</a><script>secret()</script>")
     assert page["title"] == "Acme"
@@ -78,6 +93,49 @@ async def test_crawl_initializes_total_byte_counter_and_returns_page(monkeypatch
         "stage": "crawling_website", "pages_discovered": 1,
         "documents_discovered": 0, "current_url": "https://example.com/",
     }
+
+
+@pytest.mark.asyncio
+async def test_crawl_accepts_public_plain_text_without_requiring_browser(monkeypatch):
+    class _Content:
+        async def read(self, _limit):
+            return b"Product catalog\nStarter plan costs $29 per month."
+
+    class _Response:
+        status = 200
+        headers = {"Content-Type": "text/plain; charset=utf-8"}
+        charset = "utf-8"
+        content = _Content()
+
+        async def text(self, **_kwargs):
+            return ""
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+    class _Session:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        def get(self, *_args, **_kwargs):
+            return _Response()
+
+    monkeypatch.setattr(website_ingestion, "_public_addresses", lambda _host: ["93.184.216.34"])
+    monkeypatch.setattr(website_ingestion.aiohttp, "ClientSession", lambda **_kwargs: _Session())
+
+    pages = await website_ingestion.crawl_website("https://example.com/catalog.txt", max_pages=1)
+
+    assert pages == [{
+        "url": "https://example.com/catalog.txt",
+        "title": "catalog.txt",
+        "text": "Product catalog\nStarter plan costs $29 per month.",
+    }]
 
 
 @pytest.mark.asyncio

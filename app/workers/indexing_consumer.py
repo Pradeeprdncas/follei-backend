@@ -21,6 +21,38 @@ from loguru import logger
 
 _settings = get_settings()
 
+_TERMINAL_JOB_STATUSES = {"indexed", "completed", "ready", "failed", "dead_lettered", "dead_letter", "error"}
+
+
+def replay_durable_indexing_jobs() -> int:
+    """Republish durable jobs that were committed but never reached Kafka.
+
+    PostgreSQL is the source of truth for indexing work.  A process can stop
+    after committing a job row but before publishing its Kafka message, so the
+    worker replays non-terminal rows on startup.  The consumer separately
+    ignores terminal duplicates, making this safe if Kafka already contains a
+    copy of the message.
+    """
+    db = SessionLocal()
+    try:
+        jobs = db.query(IndexingJob).filter(IndexingJob.status.in_(("queued", "retrying"))).all()
+        if not jobs:
+            return 0
+        producer = get_producer()
+        published = 0
+        for job in jobs:
+            payload = dict(job.payload or {})
+            payload["job_id"] = str(job.id)
+            payload["tenant_id"] = str(job.tenant_id)
+            payload["retry_count"] = int(job.attempt_count or 0)
+            producer.send(_settings.KAFKA_TOPIC_INDEXING, key=str(job.id), value=payload)
+            published += 1
+        producer.flush()
+        logger.info("Replayed {} durable indexing job(s) to Kafka", published)
+        return published
+    finally:
+        db.close()
+
 
 def sync_ingestion_run_status(db, job: IndexingJob) -> None:
     """Finish a source run only after every fanned-out index job is terminal."""
@@ -132,6 +164,7 @@ class IndexingWorker:
     def run(self):
         """Main consumer loop."""
         ensure_topics()
+        replay_durable_indexing_jobs()
         consumer = get_consumer(_settings.KAFKA_TOPIC_INDEXING, _settings.KAFKA_CONSUMER_GROUP)
         logger.info(f"Indexing worker started. Listening on topic: {_settings.KAFKA_TOPIC_INDEXING}")
 
@@ -144,6 +177,11 @@ class IndexingWorker:
                 logger.info(f"Received indexing job: {data.get('job_id')}")
                 db = SessionLocal()
                 job = db.query(IndexingJob).filter(IndexingJob.id == data.get("job_id"), IndexingJob.tenant_id == data.get("tenant_id")).first()
+                if job and str(job.status or "").lower() in _TERMINAL_JOB_STATUSES:
+                    logger.info("Skipping duplicate terminal indexing job {} ({})", job.id, job.status)
+                    commit_message(consumer, message)
+                    db.close()
+                    continue
                 if job:
                     job.status = "processing"
                     job.attempt_count = int(job.attempt_count or 0) + 1

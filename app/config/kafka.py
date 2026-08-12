@@ -64,4 +64,9 @@ def get_consumer(topic: str, group_id: str | None = None) -> KafkaConsumer:
         auto_offset_reset="earliest",
         value_deserializer=lambda m: json.loads(m.decode("utf-8")),
         enable_auto_commit=False,
+        # Resource syncs can legitimately spend several minutes downloading a
+        # large first-time mailbox or Drive corpus before returning to poll.
+        # The Kafka default (5 minutes) evicts the healthy worker mid-job.
+        max_poll_interval_ms=30 * 60 * 1000,
+        max_poll_records=1,
     )

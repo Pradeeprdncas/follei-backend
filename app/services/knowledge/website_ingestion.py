@@ -28,14 +28,15 @@ def _progress(callback: ProgressCallback | None, **values: object) -> None:
 
 
 class _PinnedResolver(AbstractResolver):
-    """Resolve the crawl host only to addresses validated before the request."""
+    """Resolve allowed site aliases only to addresses validated before requests."""
 
-    def __init__(self, hostname: str, addresses: list[str]):
-        self.hostname = hostname
-        self.addresses = addresses
+    def __init__(self, hosts: dict[str, list[str]]):
+        self.hosts = hosts
 
     async def resolve(self, host: str, port: int = 0, family: int = socket.AF_INET):
-        if host.lower().rstrip(".") != self.hostname:
+        normalized = host.lower().rstrip(".")
+        addresses = self.hosts.get(normalized)
+        if not addresses:
             raise OSError("Crawler DNS resolver rejected an unexpected host")
         return [
             {
@@ -46,7 +47,7 @@ class _PinnedResolver(AbstractResolver):
                 "proto": 0,
                 "flags": 0,
             }
-            for value in self.addresses
+            for value in addresses
         ]
 
     async def close(self):
@@ -64,12 +65,18 @@ def _public_addresses(hostname: str) -> list[str]:
     return sorted(addresses)
 
 
+def _site_aliases(hostname: str) -> set[str]:
+    """Return only the conventional apex/www pair for one submitted site."""
+    host = hostname.lower().rstrip(".")
+    return {host, host[4:]} if host.startswith("www.") else {host, f"www.{host}"}
+
+
 def validate_public_url(url: str, *, expected_host: str | None = None) -> str:
     parsed = urlparse(url)
     if parsed.scheme not in {"http", "https"} or not parsed.hostname or parsed.username or parsed.password:
         raise ValueError("Only public HTTP(S) URLs without embedded credentials are allowed")
     host = parsed.hostname.lower().rstrip(".")
-    if expected_host and host != expected_host:
+    if expected_host and host not in _site_aliases(expected_host):
         raise ValueError("Crawler may not leave the submitted domain")
     _public_addresses(host)
     return host
@@ -97,7 +104,7 @@ async def _crawl_rendered(
     max_page_bytes: int,
     max_total_bytes: int,
     root_host: str,
-    root_addresses: list[str],
+    allowed_hosts: dict[str, list[str]],
     robots: RobotFileParser,
     progress_callback: ProgressCallback | None = None,
 ) -> list[dict]:
@@ -112,11 +119,20 @@ async def _crawl_rendered(
     queue = deque([urldefrag(url)[0]])
     total_bytes = 0
     async with async_playwright() as playwright:
-        pinned = next((value for value in root_addresses if ":" not in value), root_addresses[0])
-        browser = await playwright.chromium.launch(
-            headless=True,
-            args=[f"--host-resolver-rules=MAP {root_host} {pinned}, EXCLUDE localhost"],
-        )
+        resolver_rules = []
+        for host, addresses in allowed_hosts.items():
+            pinned = next((value for value in addresses if ":" not in value), addresses[0])
+            resolver_rules.append(f"MAP {host} {pinned}")
+        try:
+            browser = await playwright.chromium.launch(
+                headless=True,
+                args=[f"--host-resolver-rules={', '.join(resolver_rules)}, EXCLUDE localhost"],
+            )
+        except Exception:
+            # The browser runtime is optional. A missing Playwright browser may
+            # reduce JavaScript-only coverage, but it must not turn a normal
+            # safe-transport crawl into three identical failed retries.
+            return []
         context = await browser.new_context(user_agent=USER_AGENT)
 
         async def bounded_request(route, request):
@@ -200,13 +216,20 @@ async def crawl_website(
     max_document_bytes = settings.WEBSITE_CRAWL_MAX_DOCUMENT_BYTES
     max_total_bytes = settings.WEBSITE_CRAWL_MAX_TOTAL_BYTES
     root_host = validate_public_url(url)
-    root_addresses = _public_addresses(root_host)
+    allowed_hosts: dict[str, list[str]] = {root_host: _public_addresses(root_host)}
+    for alias in _site_aliases(root_host) - {root_host}:
+        try:
+            allowed_hosts[alias] = _public_addresses(alias)
+        except (OSError, ValueError):
+            # A site does not have to publish both aliases. If it redirects to
+            # an absent alias, the pinned resolver will still reject it.
+            pass
     timeout = aiohttp.ClientTimeout(total=20, connect=5, sock_read=10)
     headers = {"User-Agent": USER_AGENT, "Accept": "text/html,application/xhtml+xml"}
     pages, seen, queue, total_bytes = [], set(), deque([urldefrag(url)[0]]), 0
     assets: list[dict] = []
     asset_urls: set[str] = set()
-    connector = aiohttp.TCPConnector(resolver=_PinnedResolver(root_host, root_addresses))
+    connector = aiohttp.TCPConnector(resolver=_PinnedResolver(allowed_hosts))
     _progress(
         progress_callback,
         stage="reading_robots",
@@ -237,13 +260,25 @@ async def crawl_website(
                         current = urljoin(current, response.headers["Location"])
                         validate_public_url(current, expected_host=root_host)
                         continue
-                    if response.status != 200 or "text/html" not in response.headers.get("Content-Type", "").lower():
+                    content_type = response.headers.get("Content-Type", "").lower()
+                    if response.status != 200:
                         break
                     body = await response.content.read(max_page_bytes + 1)
                     if len(body) > max_page_bytes:
                         break
                     total_bytes += len(body)
-                    page, links = _extract_page(current, body.decode(response.charset or "utf-8", errors="replace"))
+                    if "text/html" in content_type or "application/xhtml+xml" in content_type:
+                        page, links = _extract_page(current, body.decode(response.charset or "utf-8", errors="replace"))
+                    elif any(value in content_type for value in ("text/plain", "text/markdown", "application/json")):
+                        text = body.decode(response.charset or "utf-8", errors="replace").strip()
+                        page = {
+                            "url": current,
+                            "title": Path(urlparse(current).path).name or current,
+                            "text": text,
+                        }
+                        links = []
+                    else:
+                        break
                     if page["text"].strip():
                         pages.append(page)
                         _progress(
@@ -289,7 +324,7 @@ async def crawl_website(
         max_page_bytes=max_page_bytes,
         max_total_bytes=max_total_bytes,
         root_host=root_host,
-        root_addresses=root_addresses,
+        allowed_hosts=allowed_hosts,
         robots=robots,
         progress_callback=progress_callback,
     )

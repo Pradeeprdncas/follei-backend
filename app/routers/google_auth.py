@@ -170,9 +170,23 @@ def google_auth_start(
     except GoogleWorkspaceError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     return api_envelope({
+        "status": "authorization_required",
         "flow": "account_auth",
         "requires_bearer": False,
         "authorization_url": authorization_url,
+        "next_action": {
+            "type": "full_page_redirect",
+            "url_field": "authorization_url",
+        },
+        "google_approval": {
+            "controlled_by": "google",
+            "verification_number": None,
+            "verification_number_available_to_backend": False,
+            "instruction": (
+                "Complete approval in Google's page. If Google displays a number, "
+                "select that same number in the Google prompt on your trusted device."
+            ),
+        },
         "resources": resources,
         "scopes": [
             *(RESOURCE_SCOPES[item] for item in resources),
@@ -255,6 +269,7 @@ async def google_auth_callback(
         ))
         db.commit()
         query = {
+            "status": "success",
             "exchange_code": exchange_code,
             "expires_in": _EXCHANGE_TTL_SECONDS,
             "is_new_user": str(is_new_user).lower(),
@@ -279,7 +294,12 @@ async def google_auth_callback(
             safe_reason,
             type(exc).__name__,
         )
-        query = {"error": safe_error, "step": failure_step, "reason": safe_reason}
+        query = {
+            "status": "error",
+            "error": safe_error,
+            "step": failure_step,
+            "reason": safe_reason,
+        }
 
     callback_url = f"{_settings.FRONTEND_BASE_URL.rstrip('/')}/auth/callback"
     return RedirectResponse(
@@ -324,6 +344,7 @@ def exchange_google_login(payload: GoogleAuthExchangeRequest, db: Session = Depe
         ).first()
     db.commit()
     return {
+        "status": "authenticated",
         "access_token": create_access_token(user.id, user.tenant_id),
         "refresh_token": create_access_token(user.id, user.tenant_id),
         "token_type": "bearer",

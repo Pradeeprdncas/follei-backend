@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import math
+import asyncio
 from collections.abc import Sequence
 
 import httpx
@@ -65,18 +66,33 @@ class MistralEmbeddingService:
         owns_client = self.http_client is None
         client = self.http_client or httpx.AsyncClient(timeout=self.settings.MISTRAL_REQUEST_TIMEOUT_SECONDS)
         try:
-            try:
-                response = await client.post(
-                    f"{self.settings.MISTRAL_API_BASE.rstrip('/')}/embeddings",
-                    headers={"Authorization": f"Bearer {self.settings.MISTRAL_API_KEY}"},
-                    json={"model": self.model, "input": texts},
-                )
-            except httpx.TimeoutException as exc:
-                raise ProviderTimeoutError() from exc
-            except httpx.RequestError as exc:
-                raise error_for_status(503) from exc
-            if response.status_code >= 400:
-                raise error_for_status(response.status_code)
+            response: httpx.Response | None = None
+            provider_error: Exception | None = None
+            for attempt in range(3):
+                try:
+                    response = await client.post(
+                        f"{self.settings.MISTRAL_API_BASE.rstrip('/')}/embeddings",
+                        headers={"Authorization": f"Bearer {self.settings.MISTRAL_API_KEY}"},
+                        json={"model": self.model, "input": texts},
+                    )
+                    if response.status_code < 400:
+                        provider_error = None
+                        break
+                    provider_error = error_for_status(response.status_code)
+                    if not provider_error.retryable:
+                        raise provider_error
+                except httpx.TimeoutException as exc:
+                    provider_error = ProviderTimeoutError()
+                    provider_error.__cause__ = exc
+                except httpx.RequestError as exc:
+                    provider_error = error_for_status(503)
+                    provider_error.__cause__ = exc
+                if attempt < 2:
+                    await asyncio.sleep(0.5 * (2 ** attempt))
+            if provider_error is not None:
+                raise provider_error
+            if response is None:
+                raise error_for_status(503)
             try:
                 data = response.json().get("data", [])
             except (TypeError, ValueError) as exc:

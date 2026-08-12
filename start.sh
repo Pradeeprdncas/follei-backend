@@ -10,10 +10,11 @@ NO_INFRA=0
 CHECK_ONLY=0
 INSTALL_BROWSER=0
 KEEP_RUNNING=0
+NO_CONSOLE=0
 
 usage() {
   cat <<'EOF'
-Usage: ./start.sh [--full] [--no-infra] [--check] [--install-browser] [--keep-running]
+Usage: ./start.sh [--full] [--no-infra] [--check] [--install-browser] [--keep-running] [--no-console]
 
   default            API + indexing + knowledge sync + Google sync + website crawl
   --full             Also start analysis, lead scoring, mail, flow, and HubSpot workers
@@ -21,6 +22,7 @@ Usage: ./start.sh [--full] [--no-infra] [--check] [--install-browser] [--keep-ru
   --check            Validate configuration/imports and print the service plan only
   --install-browser  Install Playwright Chromium for JavaScript-heavy website crawling
   --keep-running     Reuse already-running Follei services instead of restarting them
+  --no-console       Do not open the one-window live log console
 EOF
 }
 
@@ -31,6 +33,7 @@ while [[ $# -gt 0 ]]; do
     --check) CHECK_ONLY=1 ;;
     --install-browser) INSTALL_BROWSER=1 ;;
     --keep-running) KEEP_RUNNING=1 ;;
+    --no-console) NO_CONSOLE=1 ;;
     --help|-h) usage; exit 0 ;;
     *) echo "[ERROR] Unknown option: $1"; usage; exit 2 ;;
   esac
@@ -190,7 +193,10 @@ start_service() {
   stop_existing_service "${name}" "${marker}"
   (
     cd "${ROOT_DIR}"
-    nohup "${PYTHON}" -u "$@" >>"${out_log}" 2>>"${err_log}" &
+    # A new session prevents terminal/IDE process-group cleanup from killing
+    # workers immediately after this launcher exits. Redirect stdin too so no
+    # service retains the invoking terminal.
+    nohup setsid "${PYTHON}" -u "$@" </dev/null >>"${out_log}" 2>>"${err_log}" &
     echo "$!" >"${pid_file}"
   )
   sleep 1
@@ -227,3 +233,16 @@ echo "[6/6] Follei core runtime is ready."
 print_plan
 echo "API docs: http://127.0.0.1:${PORT}/docs"
 echo "Logs/PIDs: ${RUNTIME_DIR}"
+# Catch workers that survive the initial one-second check but exit during the
+# remainder of startup. A healthy API alone is insufficient for ingestion.
+for service in api indexing-worker knowledge-sync-worker google-workspace-worker website-ingestion-worker; do
+  is_running "${RUNTIME_DIR}/${service}.pid" || {
+    echo "[ERROR] ${service} exited during startup; see ${RUNTIME_DIR}/${service}.err.log."
+    exit 1
+  }
+done
+if [[ "${NO_CONSOLE}" == "0" ]]; then
+  console_args=("${ROOT_DIR}")
+  [[ "${FULL_PROFILE}" == "1" ]] && console_args+=(--full)
+  "${ROOT_DIR}/scripts/open_runtime_console.sh" "${console_args[@]}"
+fi

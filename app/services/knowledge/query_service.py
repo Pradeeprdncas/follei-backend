@@ -43,11 +43,15 @@ class KnowledgeQueryService:
         tenant_id: str,
         category: str | None,
         top_k: int | None,
+        include_unreviewed: bool = False,
+        source_ids: list[str] | None = None,
     ) -> PreparedKnowledgeQuery:
         chunks = await self.retrieval.search(
             query,
             tenant_id,
             category=category,
             top_k=top_k or self.settings.KNOWLEDGE_QUERY_TOP_K,
+            include_unreviewed=include_unreviewed,
+            source_ids=source_ids,
         )
         return PreparedKnowledgeQuery(prompt=assemble_context_prompt(query, chunks), chunks=chunks)

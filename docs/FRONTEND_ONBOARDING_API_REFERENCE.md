@@ -289,9 +289,20 @@ const response = await fetch(`${API_ORIGIN}/api/v1/auth/google/start`, {
 ```json
 {
   "data": {
+    "status": "authorization_required",
     "flow": "account_auth",
     "requires_bearer": false,
     "authorization_url": "https://accounts.google.com/o/oauth2/v2/auth?client_id=…&state=…&nonce=…&code_challenge=…",
+    "next_action": {
+      "type": "full_page_redirect",
+      "url_field": "authorization_url"
+    },
+    "google_approval": {
+      "controlled_by": "google",
+      "verification_number": null,
+      "verification_number_available_to_backend": false,
+      "instruction": "Complete approval in Google's page. If Google displays a number, select that same number in the Google prompt on your trusted device."
+    },
     "resources": ["gmail", "drive", "calendar", "contacts"],
     "scopes": [
       "https://www.googleapis.com/auth/gmail.readonly",
@@ -317,6 +328,13 @@ values for this flow. `authorization_url` includes one-time state, nonce, PKCE,
 offline access, and `prompt=consent`. `scopes` lists the Workspace and Gmail
 communication scopes; the URL additionally contains Google's identity scopes.
 
+`google_approval.verification_number` is always `null`. Google's number-matching
+challenge belongs to Google's own two-step-verification UI: Google shows the
+number in its browser page and trusted-device prompt but never returns it to
+Follei through OAuth. The frontend must navigate to `authorization_url`; it must
+not wait for a number from this API. A user who does not receive Google's phone
+prompt must use the recovery options presented by Google itself.
+
 Errors:
 
 | Status | Body/cause |
@@ -339,7 +357,7 @@ Success:
 
 ```http
 HTTP/1.1 302 Found
-Location: https://app.follei.example/auth/callback?exchange_code=QF98vS…&expires_in=120&is_new_user=true&connection_id=167f9aed-22b7-4de8-b062-a69687f94c77&email_connection_id=32afcc62-9ec7-41a9-8c55-332098a81d5f&gmail_communication=connected&run_id=80cb66ce-0137-4548-9b8f-45d4a77a50a0&resources=gmail%2Cdrive%2Ccalendar%2Ccontacts
+Location: https://app.follei.example/auth/callback?status=success&exchange_code=QF98vS…&expires_in=120&is_new_user=true&connection_id=167f9aed-22b7-4de8-b062-a69687f94c77&email_connection_id=32afcc62-9ec7-41a9-8c55-332098a81d5f&gmail_communication=connected&run_id=80cb66ce-0137-4548-9b8f-45d4a77a50a0&resources=gmail%2Cdrive%2Ccalendar%2Ccontacts
 ```
 
 Query fields are all strings. `exchange_code` is a one-use credential valid for 120 seconds; exchange it immediately and never log/store it. `expires_in` is `"120"`. `is_new_user` is `"true"` or `"false"`. `connection_id` is the created/reused Workspace knowledge connection. `email_connection_id` is the created/reused tenant Gmail communication connection. `gmail_communication=connected` means backend-side sending, replies, campaigns, and inbound auto-reply tracking were authorized. `run_id` identifies the ingestion run, which already contains four independently queued jobs. `resources` is one comma-separated value: `gmail,drive,calendar,contacts`.
@@ -348,7 +366,7 @@ Failure, including user cancellation:
 
 ```http
 HTTP/1.1 302 Found
-Location: https://app.follei.example/auth/callback?error=access_denied
+Location: https://app.follei.example/auth/callback?status=error&error=access_denied&step=authorization&reason=access_denied
 ```
 
 User cancellation or Google's `access_denied` becomes the fixed safe value `error=access_denied`. Every other failure becomes `error=oauth_failed`, including bad/expired/reused state, provider exchange/identity verification failure, inactive Follei user, missing refresh token, or account/connector persistence failure. Queue publication happens after the redirect and cannot fail authentication. Raw provider error descriptions are discarded. The redirect never contains Google tokens, client secrets, provider authorization codes, or raw provider errors.
@@ -393,6 +411,7 @@ handoff. Provider tokens and Google authorization codes are never returned:
 
 ```json
 {
+  "status": "authenticated",
   "access_token": "<jwt>",
   "refresh_token": "<jwt>",
   "token_type": "bearer",
@@ -1655,21 +1674,135 @@ Use `AbortController` when the user cancels or leaves the page. If a proxy buffe
 
 ---
 
-## 11. End-to-end frontend call order
+## 11. Gmail insights and onboarding company assessment
+
+These endpoints are for the review screen after a Google Workspace ingestion
+run becomes terminal. They describe persisted data only and never send mail.
+
+### 11.1 Gmail communication insights
+
+`GET /api/v1/integrations/google-workspace/connections/{connection_id}/insights`
+— bearer auth required; no body. An unknown, inactive, or other-tenant
+connection returns `404 {"detail":"Google Workspace connection not found"}`.
+
+The successful envelope's `data` contains `connection_id`, `email`,
+`onboarding_state_url`, and:
+
+```json
+{
+  "gmail": {
+    "analysis_status": "ready",
+    "needs_confirmation": true,
+    "classification_method": "gmail_labels_plus_sender_header_and_subject_heuristics",
+    "counts": {
+      "messages_analyzed": 1000,
+      "threads_analyzed": 922,
+      "sent_messages": 37,
+      "excluded_promotions": 244,
+      "excluded_automated_or_bulk": 606,
+      "likely_human_threads": 72,
+      "awaiting_user_reply": 55,
+      "latest_message_from_user": 17
+    },
+    "metrics": {
+      "threads_latest_from_user_percent": 23.6,
+      "median_observed_reply_hours": 22.9,
+      "median_sent_body_characters": 344
+    },
+    "observations": [{
+      "key": "reply_gap",
+      "severity": "needs_review",
+      "message": "55 likely human threads currently end with an inbound message.",
+      "recommended_action": "Review candidates and draft replies; do not auto-send without approval."
+    }],
+    "reply_candidates": [{
+      "thread_id": "provider-thread-id",
+      "sender_name": "Example Buyer",
+      "sender_email": "buyer@example.com",
+      "subject": "Can we discuss pricing?",
+      "received_at": "2026-08-12T06:52:14+00:00",
+      "snippet": "A short persisted Gmail snippet...",
+      "review_status": "pending"
+    }]
+  }
+}
+```
+
+`analysis_status` is `ready` when a persisted Gmail corpus was found and
+`not_available` otherwise. `awaiting_user_reply` is a triage candidate count,
+not proof that every thread requires a response. The UI must say “likely-human
+threads that currently end inbound” and require confirmation. Promotions,
+bulk/automated mail, common job-board notifications, and assistant
+notifications are excluded using Gmail labels plus sender/header/subject
+heuristics.
+
+### 11.2 Stream the combined company assessment
+
+`POST /api/v1/knowledge/company-assessment` — bearer auth required; response is
+`text/event-stream`.
+
+```json
+{
+  "google_connection_id": "d95e9d70-2e64-45f8-a00e-44be1af14e67",
+  "top_k": 12
+}
+```
+
+`google_connection_id` is required and must be a UUID belonging to the JWT
+tenant. `top_k` is optional, integer `4..20`, default `12`. Unknown/inactive/
+other-tenant connections return `404`. Validation failures return `422`.
+Provider failures before streaming use the typed JSON error documented in
+section 10; generation failures after streaming begins arrive as an SSE
+`error` event.
+
+The stream order is:
+
+```text
+event: analysis
+data: {"gmail":{...},"review_mode":true,"autonomous_actions_unlocked":false,"evidence_coverage":{"google_workspace_chunks":6,"website_chunks":6}}
+
+event: sources
+data: {"sources":[{"chunk_id":"...","score":0.82,"category":"services","heading_path":[],"chunk_type":"prose","source_id":"...","approval_status":"draft"}]}
+
+event: token
+data: {"text":"The company appears to..."}
+
+event: done
+data: {"status":"complete","requires_confirmation":true}
+```
+
+This endpoint intentionally searches both the selected Google source and the
+tenant's active website sources. It may read `draft` evidence so the user can
+review an assessment before approval. It does **not** approve facts, unlock
+autonomous actions, or change readiness. Render `token.text` incrementally;
+show the deterministic Gmail analysis as soon as `analysis` arrives, show
+evidence coverage, and label draft-derived statements “Needs confirmation.”
+Use authenticated streaming `fetch`, not native `EventSource`, exactly as in
+section 10.
+
+Measured locally with real persisted evidence, the assessment's first event
+arrived in about 2.8 seconds while full generation took about 24 seconds.
+Therefore render an immediate local “Comparing Google and website evidence…”
+state before the first byte, then replace it with live cards/tokens.
+
+---
+
+## 12. End-to-end frontend call order
 
 1. Register/sign in with email/password, or run the combined Google auth full-page redirect flow and immediately exchange its query-string code.
 2. Store session tokens and tenant ID; complete the existing company/workspace profile step.
 3. Connect Google Workspace through the popup and/or add a website source.
-4. Poll `GET /api/v1/onboarding/state` while runs are active.
-5. Render every category from `category_summaries`:
+4. Stream each run's `events_url`; use the individual run snapshot as a polling fallback. Fetch full onboarding state on entry and after terminal events, not every second.
+5. After Google finishes, fetch connection insights and stream the combined company assessment. Require confirmation for draft findings and reply candidates.
+6. Render every category from `category_summaries`:
    - aggregate → summary/breakdown/samples;
    - enumerable → fetch `display.items_endpoint`, then edit/approve/reject.
-6. For each `confirmations_needed` entry, add data or submit a confirmation.
-7. Import leads: optional dry preview, upload, poll, durable preview/review, commit.
-8. Continue when `can_continue` is true. Enable autonomous actions only when `ready_for_autonomous_actions` is true.
-9. Use the knowledge query stream after approved knowledge has been indexed.
+7. For each `confirmations_needed` entry, add data or submit a confirmation.
+8. Import leads: optional dry preview, upload, poll, durable preview/review, commit.
+9. Continue when `can_continue` is true. Enable autonomous actions only when `ready_for_autonomous_actions` is true.
+10. Use the production knowledge query stream after approved knowledge has been indexed.
 
-## 12. Frontend implementation warnings checklist
+## 13. Frontend implementation warnings checklist
 
 - **Google auth scope:** Google registration/sign-in deliberately includes Workspace consent and automatically queues all four resource syncs; it is not an identity-only flow.
 - **Popup blocking:** open a blank window synchronously, then navigate after the authenticated start request.

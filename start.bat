@@ -13,6 +13,7 @@ set "NO_INFRA=0"
 set "CHECK_ONLY=0"
 set "INSTALL_BROWSER=0"
 set "KEEP_RUNNING=0"
+set "NO_CONSOLE=0"
 
 :parse_args
 if "%~1"=="" goto :args_done
@@ -24,6 +25,7 @@ if /I "%~1"=="--check" set "CHECK_ONLY=1"
 if /I "%~1"=="--install-browser" set "INSTALL_BROWSER=1"
 if /I "%~1"=="--skip-browser" set "INSTALL_BROWSER=0"
 if /I "%~1"=="--keep-running" set "KEEP_RUNNING=1"
+if /I "%~1"=="--no-console" set "NO_CONSOLE=1"
 if /I "%~1"=="--help" goto :help
 shift
 goto :parse_args
@@ -165,6 +167,14 @@ if "%KEEP_RUNNING%"=="1" set "KEEP_ARG=-KeepRunning"
 powershell -NoProfile -ExecutionPolicy Bypass -File "%ROOT%scripts\start_local_runtime.ps1" -Root "%ROOT:~0,-1%" -Python "%PYTHON%" -Port %PORT% %OPEN_ARG% %FULL_ARG% %KEEP_ARG%
 if errorlevel 1 goto :failed
 
+if "%NO_CONSOLE%"=="0" (
+  if "%FULL_PROFILE%"=="1" (
+    powershell -NoProfile -ExecutionPolicy Bypass -File "%ROOT%scripts\open_runtime_console.ps1" -Root "%ROOT:~0,-1%" -Full
+  ) else (
+    powershell -NoProfile -ExecutionPolicy Bypass -File "%ROOT%scripts\open_runtime_console.ps1" -Root "%ROOT:~0,-1%"
+  )
+)
+
 echo [7/7] Startup complete.
 echo.
 call :print_service_plan
@@ -188,7 +198,7 @@ endlocal
 exit /b 1
 
 :help
-echo Usage: start.bat [--full] [--no-infra] [--check] [--install-browser] [--keep-running] [--no-open] [--no-pause]
+echo Usage: start.bat [--full] [--no-infra] [--check] [--install-browser] [--keep-running] [--no-open] [--no-pause] [--no-console]
 echo.
 echo   default         API + indexing + knowledge sync + Google sync + website crawl.
 echo   --full          Also start analysis, lead scoring, mail, flow, and HubSpot workers.
@@ -198,6 +208,7 @@ echo   --install-browser  Install Playwright Chromium for JavaScript-heavy sites
 echo   --keep-running  Reuse already-running Follei services instead of restarting them.
 echo   --no-open       Do not open the API documentation after startup.
 echo   --no-pause      Do not wait for a key press when the script finishes.
+echo   --no-console    Do not open one Windows Terminal window with a tab per service.
 echo   --skip-browser  Backward-compatible alias for the light default.
 endlocal
 exit /b 0

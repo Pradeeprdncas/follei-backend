@@ -24,7 +24,7 @@ from app.services.knowledge.object_storage import store_source
 _settings = get_settings()
 
 
-def _queue_index(db, *, tenant_id: str, source_id: str, run_id: str, record: dict, category: str | None) -> str:
+def _prepare_index_job(db, *, tenant_id: str, source_id: str, run_id: str, record: dict, category: str | None) -> tuple[str, dict]:
     job_id = uuid4()
     is_asset = "content" in record
     suffix = record.get("file_type", "txt") if is_asset else "txt"
@@ -43,8 +43,7 @@ def _queue_index(db, *, tenant_id: str, source_id: str, run_id: str, record: dic
         "source_metadata": {"knowledge_source_id": source_id, "ingestion_run_id": run_id},
     }
     db.add(IndexingJob(id=job_id, tenant_id=UUID(tenant_id), status="queued", payload=payload))
-    get_producer().send(_settings.KAFKA_TOPIC_INDEXING, key=str(job_id), value=payload)
-    return str(job_id)
+    return str(job_id), payload
 
 
 def process_website_job(data: dict) -> None:
@@ -84,11 +83,14 @@ def process_website_job(data: dict) -> None:
         if not pages and not assets:
             raise ValueError("No crawlable content was found")
         indexed_jobs = []
+        indexing_messages: list[tuple[str, dict]] = []
         for record in [*pages, *assets]:
-            indexed_jobs.append(_queue_index(
+            index_job_id, index_payload = _prepare_index_job(
                 db, tenant_id=data["tenant_id"], source_id=data["source_id"], run_id=data["run_id"],
                 record=record, category=None,
-            ))
+            )
+            indexed_jobs.append(index_job_id)
+            indexing_messages.append((index_job_id, index_payload))
             job.payload = {
                 **(job.payload or {}),
                 "stage": "queueing_for_classification",
@@ -97,7 +99,14 @@ def process_website_job(data: dict) -> None:
                 "documents_discovered": len(assets),
             }
             db.commit()
-        get_producer().flush()
+        # PostgreSQL is the control-plane source of truth. Every indexing job
+        # must be committed before Kafka can expose its message to a consumer;
+        # publishing first creates a race where the document is indexed but the
+        # job/run can never be reconciled and remains queued forever.
+        producer = get_producer()
+        for index_job_id, index_payload in indexing_messages:
+            producer.send(_settings.KAFKA_TOPIC_INDEXING, key=index_job_id, value=index_payload)
+        producer.flush()
         job.payload = {
             **(job.payload or {}),
             "stage": "indexing",

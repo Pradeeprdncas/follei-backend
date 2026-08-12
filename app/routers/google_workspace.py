@@ -18,6 +18,7 @@ from app.models.integrations.oauth_connection import GoogleWorkspaceConnection
 from app.models.knowledge.ingestion import IngestionRun, SourceIngestionJob
 from app.schemas.api_envelope import api_envelope
 from app.services.integrations.google_workspace import DEFAULT_RESOURCES, GoogleWorkspaceError, GoogleWorkspaceOAuthService, RESOURCE_SCOPES
+from app.services.integrations.google_workspace_insights import build_gmail_insights
 
 
 router = APIRouter(prefix="/api/v1/integrations/google-workspace", tags=["Google Workspace"])
@@ -139,3 +140,30 @@ def sync_connection(
         "events_url": f"/api/v1/onboarding/runs/{run.id}/events",
         "onboarding_state_url": "/api/v1/onboarding/state",
     }, accepted=True)
+
+
+@router.get("/connections/{connection_id}/insights")
+def connection_insights(
+    connection_id: UUID,
+    db: Session = Depends(get_db),
+    tenant_id: str = Depends(get_authenticated_tenant_id),
+):
+    """Return persisted, review-only communication insights for this tenant."""
+    connection = db.query(GoogleWorkspaceConnection).filter(
+        GoogleWorkspaceConnection.id == connection_id,
+        GoogleWorkspaceConnection.tenant_id == UUID(tenant_id),
+        GoogleWorkspaceConnection.status == "active",
+    ).first()
+    if not connection or not connection.source_id:
+        raise HTTPException(status_code=404, detail="Google Workspace connection not found")
+    return api_envelope({
+        "connection_id": str(connection.id),
+        "email": connection.email_address,
+        "gmail": build_gmail_insights(
+            db,
+            tenant_id=UUID(tenant_id),
+            source_id=connection.source_id,
+            account_email=connection.email_address,
+        ),
+        "onboarding_state_url": "/api/v1/onboarding/state",
+    })

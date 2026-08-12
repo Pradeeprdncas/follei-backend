@@ -47,6 +47,7 @@ def test_google_exchange_issues_session_once_and_never_returns_provider_tokens()
         second = client.post("/api/v1/auth/google/exchange", json={"exchange_code": code})
 
         assert first.status_code == 200
+        assert first.json()["status"] == "authenticated"
         assert first.json()["user"]["tenant_id"] == str(tenant_id)
         assert "access_token" in first.json()
         assert "refresh_token" in first.json()

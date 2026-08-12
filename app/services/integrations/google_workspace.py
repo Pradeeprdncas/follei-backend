@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import base64
+import asyncio
 import secrets
 from datetime import datetime, timedelta
 from typing import Any
@@ -471,9 +472,21 @@ class GoogleWorkspaceOAuthService:
             if not next_page:
                 break
 
-        records = []
-        for message_id in dict.fromkeys(message_ids):
-            records.append(await self._fetch_gmail_message(client, headers, message_id))
+        # Initial mailbox syncs may contain up to 1,000 messages. Fetching each
+        # message (and its attachments) serially can take many minutes and makes
+        # an otherwise healthy job appear stuck. Keep concurrency bounded so we
+        # improve throughput without overwhelming Gmail or our HTTP connection
+        # pool, while preserving the message-list order in the returned records.
+        unique_message_ids = list(dict.fromkeys(message_ids))
+        semaphore = asyncio.Semaphore(12)
+
+        async def fetch_message(message_id: str) -> dict[str, Any]:
+            async with semaphore:
+                return await self._fetch_gmail_message(client, headers, message_id)
+
+        records = await asyncio.gather(
+            *(fetch_message(message_id) for message_id in unique_message_ids)
+        )
 
         profile = await client.get(
             "https://gmail.googleapis.com/gmail/v1/users/me/profile",
@@ -623,7 +636,16 @@ class GoogleWorkspaceOAuthService:
             if not next_page:
                 break
 
-        records = [await self._fetch_drive_file_content(client, headers, file) for file in files]
+        # A first Drive sync can contain hundreds of exportable files. Fetch
+        # contents concurrently with a conservative bound so one large Drive
+        # does not keep the sync job at 0% for tens of minutes.
+        semaphore = asyncio.Semaphore(50)
+
+        async def fetch_file(file: dict[str, Any]) -> dict[str, Any]:
+            async with semaphore:
+                return await self._fetch_drive_file_content(client, headers, file)
+
+        records = await asyncio.gather(*(fetch_file(file) for file in files))
         records.extend(removed)
         if not cursor:
             start = await client.get(
@@ -643,8 +665,16 @@ class GoogleWorkspaceOAuthService:
         record = dict(file)
         file_id = str(file.get("id") or "")
         mime_type = str(file.get("mimeType") or "application/octet-stream")
+        declared_size = int(file.get("size") or 0)
         if not file_id or mime_type in DRIVE_METADATA_ONLY_MIME_TYPES:
             record["content_status"] = "metadata_only"
+            return record
+        if declared_size > MAX_SYNC_CONTENT_BYTES:
+            record.update({
+                "content_status": "skipped_too_large",
+                "content_size": declared_size,
+                "content_limit": MAX_SYNC_CONTENT_BYTES,
+            })
             return record
         export_type = DRIVE_EXPORT_MIME_TYPES.get(mime_type)
         if mime_type.startswith("application/vnd.google-apps.") and not export_type:
@@ -658,7 +688,16 @@ class GoogleWorkspaceOAuthService:
             url = f"https://www.googleapis.com/drive/v3/files/{file_id}"
             params = {"alt": "media"}
             content_type = mime_type
-        response = await client.get(url, params=params, headers=headers)
+        try:
+            response = await client.get(url, params=params, headers=headers, timeout=5)
+        except httpx.TransportError as exc:
+            # One inaccessible or slow file must not discard the rest of a
+            # tenant's Drive. Keep safe structured status and continue.
+            record.update({
+                "content_status": "unavailable",
+                "content_error": type(exc).__name__,
+            })
+            return record
         if response.status_code in {403, 404}:
             record.update({"content_status": "unavailable", "content_error_status": response.status_code})
             return record

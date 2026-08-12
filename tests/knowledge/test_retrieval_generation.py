@@ -173,6 +173,11 @@ def qdrant_fixture():
             "text": "A different category.", "heading_path": ["FAQs"],
             "chunk_type": "faq", "source_id": source_a,
         }),
+        PointStruct(id=str(uuid4()), vector=[1.0, 0.0, 0.0], payload={
+            "tenant_id": tenant_a, "approval_status": "draft", "category": "services",
+            "text": "Unverified onboarding service finding.", "heading_path": ["Services"],
+            "chunk_type": "prose", "source_id": source_a,
+        }),
     ])
     return client, collection, tenant_a, tenant_b, source_a
 
@@ -197,6 +202,25 @@ async def test_search_executes_tenant_and_optional_category_isolation():
     assert {chunk.category for chunk in without_category} == {"pricing", "faqs"}
     assert all(chunk.tenant_id == tenant_a for chunk in without_category)
     assert all("999999" not in chunk.text for chunk in without_category)
+
+
+@pytest.mark.asyncio
+async def test_review_mode_can_read_tenant_drafts_but_production_query_cannot():
+    qdrant, collection, tenant_a, _tenant_b, source_a = qdrant_fixture()
+    service = KnowledgeRetrievalService(
+        qdrant=qdrant, embedder=FixedEmbedder(), settings=settings(), collection_name=collection
+    )
+
+    production = await service.search("service", tenant_a, category="services")
+    review = await service.search(
+        "service", tenant_a, category="services", include_unreviewed=True, source_ids=[source_a]
+    )
+
+    assert production == []
+    assert len(review) == 1
+    assert review[0].approval_status == "draft"
+    assert review[0].tenant_id == tenant_a
+    assert review[0].source_id == source_a
 
 
 def test_context_prompt_includes_heading_and_structural_provenance():

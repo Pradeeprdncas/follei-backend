@@ -88,7 +88,21 @@ def test_public_google_auth_start_requests_all_workspace_resources(monkeypatch):
     response = client.post("/api/v1/auth/google/start", json={"tenant_name": "Northstar Labs"})
 
     assert response.status_code == 200
+    assert response.json()["data"]["status"] == "authorization_required"
     assert response.json()["data"]["resources"] == ["gmail", "drive", "calendar", "contacts"]
+    assert response.json()["data"]["next_action"] == {
+        "type": "full_page_redirect",
+        "url_field": "authorization_url",
+    }
+    assert response.json()["data"]["google_approval"] == {
+        "controlled_by": "google",
+        "verification_number": None,
+        "verification_number_available_to_backend": False,
+        "instruction": (
+            "Complete approval in Google's page. If Google displays a number, "
+            "select that same number in the Google prompt on your trusted device."
+        ),
+    }
     assert "https://www.googleapis.com/auth/gmail.modify" in response.json()["data"]["scopes"]
     assert "https://www.googleapis.com/auth/gmail.send" in response.json()["data"]["scopes"]
     assert response.json()["data"]["gmail_communication"] == {
@@ -198,6 +212,7 @@ def test_public_google_auth_callback_redirects_one_time_exchange_not_jwts(monkey
     query = parse_qs(location.query)
     assert location.path == "/auth/callback"
     assert set(query) == {
+        "status",
         "exchange_code",
         "expires_in",
         "is_new_user",
@@ -207,6 +222,7 @@ def test_public_google_auth_callback_redirects_one_time_exchange_not_jwts(monkey
         "run_id",
         "resources",
     }
+    assert query["status"] == ["success"]
     assert query["expires_in"] == ["120"]
     assert query["is_new_user"] == ["true"]
     assert query["connection_id"] == [str(connection_id)]
@@ -297,6 +313,7 @@ def test_public_google_auth_denial_redirects_with_sanitized_error():
     location = urlparse(response.headers["location"])
     assert location.path == "/auth/callback"
     assert parse_qs(location.query) == {
+        "status": ["error"],
         "error": ["access_denied"],
         "step": ["authorization"],
         "reason": ["access_denied"],
@@ -321,6 +338,7 @@ def test_public_google_auth_invalid_callback_redirects_generic_safe_error():
     location = urlparse(response.headers["location"])
     assert location.path == "/auth/callback"
     assert parse_qs(location.query) == {
+        "status": ["error"],
         "error": ["oauth_failed"],
         "step": ["authorization"],
         "reason": ["missing_callback_parameters"],
