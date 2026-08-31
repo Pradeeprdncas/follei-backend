@@ -171,6 +171,17 @@ class Settings(BaseSettings):
     ENABLE_NOISE_REDUCTION: bool = True
     DEBUG_SAVE_AUDIO: bool = False
     TTS_OUTPUT_DIR: str = "./tts_output"
+    # "elevenlabs" keeps the existing hosted path. "follei" calls a dedicated
+    # Tamil model server so acoustic-model dependencies stay out of FastAPI.
+    TTS_PROVIDER: str = "elevenlabs"
+    FOLLEI_TTS_BASE_URL: str = "http://127.0.0.1:8090"
+    FOLLEI_TTS_API_KEY: str = ""
+    FOLLEI_TTS_MODEL: str = "tamil-prosody-v1"
+    FOLLEI_TTS_ACCENT: str = "spoken-tamil"
+    FOLLEI_TTS_PROSODY_PROFILE: str = "conversational"
+    FOLLEI_TTS_VOICE_PROFILE: str = ""
+    FOLLEI_TTS_VOICE_CONSENT_CONFIRMED: bool = False
+    FOLLEI_TTS_TIMEOUT_SECONDS: float = 120.0
 
     # -- ElevenLabs (app/analysis/services/elevenlabs_service.py, tts_service.py) --
     ELEVENLABS_API_KEY: str = Field(default="")

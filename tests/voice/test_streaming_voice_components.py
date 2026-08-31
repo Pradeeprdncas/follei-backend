@@ -1,6 +1,7 @@
 import asyncio
 
-from app.analysis.services.streaming_tts_service import PhraseBuffer
+from app.analysis.services.speech_text_normalizer import normalize_for_speech
+from app.analysis.services.streaming_tts_service import AudioChunk, PhraseBuffer
 from app.analysis.services.tanglish_style import prompt_instruction, vocabulary_for
 from app.api.websocket_handler import _strip_markdown_for_speech
 from app.services.rag.filler_service import generate_filler
@@ -49,6 +50,15 @@ def test_markdown_is_removed_before_speech():
     assert "`" not in spoken
     assert "Follei" in spoken
     assert "24/7" in spoken
+
+
+def test_speech_normalizer_preserves_tamil_and_business_english():
+    text = "உங்க  account-ல payment வரல…  சரியா?"
+    assert normalize_for_speech(text, "ta") == "உங்க account-ல payment வரல. சரியா?"
+
+
+def test_audio_chunk_uses_correct_mime_type_for_mp3():
+    assert AudioChunk(b"audio", format="mp3").media_type == "audio/mpeg"
 
 
 def test_generator_streams_tokens_to_callback(monkeypatch):

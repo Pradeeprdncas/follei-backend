@@ -1,5 +1,9 @@
 # Follei backend handover
 
+For the current 2026-08-31 project and Voice AI verification handover, including
+training, accent/prosody adaptation, consented voice cloning, latency, and
+concurrency, see `docs/FOLLEI_PROJECT_AND_VOICE_HANDOVER_2026-08-31.md`.
+
 Status date: 2026-08-10
 
 ## Working baseline

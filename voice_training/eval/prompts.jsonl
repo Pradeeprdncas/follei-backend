@@ -1,0 +1,6 @@
+{"id":"support_payment","category":"support","text":"சார், உங்க payment இன்னும் process ஆகல. நான் check பண்ணிட்டு சொல்றேன்."}
+{"id":"sales_question","category":"sales","text":"Annual plan-க்கு three months EMI option வேணுமா சார்?"}
+{"id":"otp","category":"entities","text":"உங்களுக்கு வந்த ஆறு digit OTP-யை சொல்ல முடியுமா?"}
+{"id":"currency","category":"entities","text":"இந்த plan-ோட monthly charge நாலாயிரத்து எழுநூற்று தொண்ணூற்று ஒன்பது ரூபாய்."}
+{"id":"date_time","category":"entities","text":"ஆகஸ்ட் இருபத்தி எட்டாம் தேதி afternoon three thirty-க்கு call பண்ணலாமா?"}
+{"id":"empathetic","category":"emotion","text":"இந்த issue உங்களுக்கு கஷ்டமா இருந்திருக்கும். நான் இப்பவே சரி பண்ண உதவுறேன்."}

@@ -827,6 +827,7 @@ async def _speak_single_sentence(
             "text": text,
             "audio_base64": audio_b64,
             "format": chunk.format,
+            "provider": chunk.provider,
             "index": index,
             "is_last": is_last,
             "source": source,

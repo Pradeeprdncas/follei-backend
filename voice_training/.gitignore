@@ -1,0 +1,7 @@
+data/
+models/
+outputs/
+*.wav
+*.mp3
+*.safetensors
+*.pt

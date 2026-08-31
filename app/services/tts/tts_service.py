@@ -1,34 +1,49 @@
-"""Text-to-Speech service — delegates to ElevenLabs (replaces KittenTTS)."""
+"""Public TTS service backed by the same provider as real-time voice."""
 
-import re
-from pathlib import Path
+import asyncio
 
-from app.config.settings import get_settings
-from app.analysis.services.elevenlabs_service import ElevenLabsService
-from app.analysis.services.tts_service import TTSService as AnalysisTTSService
-
-VOICE_ID_PATTERN = re.compile(r"^[a-zA-Z0-9]{20,}$")
+from app.analysis.pipelines.language_service import LanguageService
+from app.analysis.services.streaming_tts_service import AudioChunk, get_tts_provider
 
 
 class TTSService:
-    def __init__(self) -> None:
-        self._delegate = AnalysisTTSService()
-
     def list_voices(self) -> list[str]:
         return ["default"]
 
-    def synthesize(self, text: str, voice: str = "", speed: float = 1.0) -> bytes:
-        settings = get_settings()
-        voice_id = settings.ELEVENLABS_VOICE_ID
-        if voice and VOICE_ID_PATTERN.match(voice):
-            voice_id = voice
-        ts_path = Path(settings.TTS_OUTPUT_DIR) / f"response_{hash(text) & 0xFFFFFFFF:08x}.mp3"
-        ElevenLabsService.synthesize(text=text, destination=ts_path, voice_id=voice_id)
-        return ts_path.read_bytes()
+    async def synthesize_async(
+        self,
+        text: str,
+        voice: str = "default",
+        speed: float = 1.0,
+        language: str | None = None,
+    ) -> AudioChunk:
+        language = LanguageService.normalize(language or LanguageService.detect(text))
+        return await get_tts_provider().synthesize(
+            text, language, voice=voice, speed=speed
+        )
+
+    def synthesize(
+        self,
+        text: str,
+        voice: str = "default",
+        speed: float = 1.0,
+        language: str | None = None,
+    ) -> bytes:
+        return asyncio.run(self.synthesize_async(text, voice, speed, language)).audio
+
+    async def synthesize_stream(
+        self,
+        text: str,
+        voice: str = "default",
+        speed: float = 1.0,
+        language: str | None = None,
+    ):
+        chunk = await self.synthesize_async(text, voice, speed, language)
+        yield chunk.audio
 
     @property
     def is_loaded(self) -> bool:
-        return ElevenLabsService.configured()
+        return True
 
 
 AVAILABLE_VOICES = ["default"]
